@@ -1,0 +1,891 @@
+package com.waad.kidscare;
+
+import android.media.MediaPlayer;
+import android.os.Bundle;
+import android.util.Base64;
+import android.view.accessibility.AccessibilityManager;
+import android.os.Vibrator;
+import android.speech.tts.TextToSpeech;
+import android.speech.tts.Voice;
+import android.view.KeyEvent;
+import android.view.View;
+import android.webkit.JavascriptInterface;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.app.Activity;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class MainActivity extends Activity {
+
+    private static final String PREF = "kids_voice";
+    private static final String KEY_VOICE = "voice_name";
+    private static final String KEY_ENGINE = "engine_pkg";
+    private static final String GOOGLE_TTS = "com.google.android.tts";
+
+    /* الصوت السحابي (Gemini TTS) */
+    private static final String PREFS = "kids_cloud";
+    private static final String KEY_CLOUD_KEY = "cloud_key";
+    private static final String KEY_CLOUD_ON = "cloud_on";
+    private static final String KEY_CLOUD_VOICE = "cloud_voice";
+    private static final String KEY_CLOUD_MANUAL = "cloud_off_manual";
+    private static final String KEY_QUOTA_DAY = "quota_day";
+    /*
+     * موديلات الصوت بالترتيب: الأحدث الأول. كل موديل عنده حصة يومية مستقلة،
+     * فلو واحد خلصت حصته بنجرّب اللي بعده بدل ما نرجع لصوت الهاتف على طول.
+     */
+    private static final String[] CLOUD_MODELS = {
+            "gemini-3.8-flash-tts",
+            "gemini-3.1-flash-tts-preview",
+            "gemini-3.8-flash-lite-tts",
+            "gemini-2.5-flash-preview-tts"
+    };
+    private static final String GEMINI_BASE =
+            "https://generativelanguage.googleapis.com/v1beta/models/";
+
+    private WebView web;
+    private TextToSpeech tts;
+    private boolean ttsReady = false;
+    private boolean triedFallback = false;
+    private boolean screenReader = false;
+    private String engineUsed = "";
+    private String currentVoice = "";
+
+    private final ExecutorService net = Executors.newSingleThreadExecutor();
+    private MediaPlayer player;
+    private int speakSeq = 0;
+    private String lastCloudError = "";
+    private boolean cloudWarned = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+
+        AccessibilityManager am = (AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
+        screenReader = am != null && am.isEnabled() && am.isTouchExplorationEnabled();
+
+        String savedEngine = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_ENGINE, GOOGLE_TTS);
+        initTts(savedEngine == null || savedEngine.isEmpty() ? GOOGLE_TTS : savedEngine);
+
+        web = new WebView(this);
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setDatabaseEnabled(true);
+        s.setAllowFileAccess(true);
+        s.setAllowContentAccess(false);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setTextZoom(100);
+        s.setSupportZoom(false);
+        s.setBuiltInZoomControls(false);
+        web.setBackgroundColor(0xFF12180F);
+        web.setWebViewClient(new WebViewClient());
+        web.addJavascriptInterface(new Bridge(), "Native");
+        web.loadUrl("file:///android_asset/index.html");
+
+        setContentView(web);
+    }
+
+    /* ---------------- محرك النطق ---------------- */
+
+    private void initTts(String enginePkg) {
+        TextToSpeech.OnInitListener listener = status -> onTtsInit(status, enginePkg);
+        try {
+            if (enginePkg == null) {
+                tts = new TextToSpeech(this, listener);
+                engineUsed = "";
+            } else {
+                tts = new TextToSpeech(this, listener, enginePkg);
+                engineUsed = enginePkg;
+            }
+        } catch (Exception e) {
+            tts = null;
+            ttsReady = false;
+        }
+    }
+
+    private void onTtsInit(int status, String enginePkg) {
+        if (status != TextToSpeech.SUCCESS) {
+            // المحرك المطلوب غير مثبت: نرجع للمحرك الافتراضي مرة واحدة
+            if (enginePkg != null && !triedFallback) {
+                triedFallback = true;
+                getSharedPreferences(PREF, MODE_PRIVATE).edit().remove(KEY_ENGINE).apply();
+                try {
+                    if (tts != null) tts.shutdown();
+                } catch (Exception ignored) {
+                }
+                initTts(null);
+            }
+            return;
+        }
+        ttsReady = true;
+        configureTts();
+    }
+
+    private void configureTts() {
+        int ar = tts.setLanguage(new Locale("ar"));
+        if (ar == TextToSpeech.LANG_MISSING_DATA || ar == TextToSpeech.LANG_NOT_SUPPORTED) {
+            tts.setLanguage(new Locale("ar", "EG"));
+            tts.setLanguage(Locale.getDefault());
+        }
+        tts.setSpeechRate(0.95f);
+        tts.setPitch(1.0f);
+        chooseBestVoice();
+    }
+
+    /** يختار الصوت العربي المحفوظ، أو أفضل صوت عربي محلي على الجهاز. */
+    private void chooseBestVoice() {
+        String saved = getSharedPreferences(PREF, MODE_PRIVATE).getString(KEY_VOICE, null);
+        Voice best = null;
+        try {
+            Set<Voice> voices = tts.getVoices();
+            if (voices == null) return;
+            if (saved != null) {
+                for (Voice v : voices) {
+                    if (v.getName().equals(saved)) {
+                        best = v;
+                        break;
+                    }
+                }
+            }
+            if (best == null) {
+                int bestScore = Integer.MIN_VALUE;
+                for (Voice v : voices) {
+                    Locale l = v.getLocale();
+                    if (!"ar".equals(l.getLanguage())) continue;
+                    int score = v.getQuality();
+                    if (!v.isNetworkConnectionRequired()) score += 600;
+                    if ("EG".equals(l.getCountry())) score += 300;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = v;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        if (best != null) {
+            try {
+                tts.setVoice(best);
+                currentVoice = best.getName();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** اسم المحرك المقروء من قائمة المحركات المتسطبة. */
+    private String engineLabel(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return "محرك النظام الافتراضي";
+        if (tts == null) return pkg;
+        try {
+            for (TextToSpeech.EngineInfo e : tts.getEngines()) {
+                if (e.name.equals(pkg)) {
+                    String label = e.label == null ? "" : e.label.trim();
+                    return label.isEmpty() ? pkg : label;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return pkg;
+    }
+
+    /* ---------------- النطق المحلي ---------------- */
+
+    private void localSpeak(String text) {
+        if (!ttsReady || text == null) return;
+        String t = text.trim();
+        if (t.isEmpty()) return;
+        // Android يرفض النص الطويل في صمت (حد أقصى ~4000 حرف)؛ نقسمه على الجمل.
+        final int MAX = 700;
+        try {
+            tts.stop();
+            int start = 0;
+            boolean first = true;
+            while (start < t.length()) {
+                int end = Math.min(t.length(), start + MAX);
+                if (end < t.length()) {
+                    int cut = start + 200;
+                    for (int i = end; i > start + 200; i--) {
+                        char c = t.charAt(i - 1);
+                        if (c == '.' || c == '،' || c == '؟' || c == '!' || c == '\n' || c == '؛') {
+                            cut = i;
+                            break;
+                        }
+                    }
+                    end = cut;
+                }
+                String part = t.substring(start, end).trim();
+                if (!part.isEmpty()) {
+                    tts.speak(part, first ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD, null, "farm" + start);
+                }
+                first = false;
+                start = end;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /* ---------------- الصوت السحابي ---------------- */
+
+    private android.content.SharedPreferences prefs() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE);
+    }
+
+    private String cloudKey() {
+        String k = prefs().getString(KEY_CLOUD_KEY, "");
+        if (k == null || k.trim().isEmpty()) k = builtinKey();
+        return k == null ? "" : k.trim();
+    }
+
+    /** مفتاح جيميناي المدموج داخل التطبيق وقت البناء. فارغ لو البناء بدون مفتاح. */
+    private String builtinKey;
+    private boolean builtinLoaded;
+
+    private String builtinKey() {
+        if (builtinLoaded) return builtinKey;
+        builtinLoaded = true;
+        try (InputStream in = getAssets().open("gemini_key.txt")) {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[1024];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            builtinKey = new String(out.toByteArray(), StandardCharsets.UTF_8).trim();
+        } catch (Exception e) {
+            builtinKey = "";
+        }
+        return builtinKey;
+    }
+
+    /**
+     * الصوت السحابي شغال لو فيه مفتاح (محفوظ أو مدموج) والإنسان ما أطفأهوش بنفسه.
+     * الإعداد القديم cloud_on=false من نسخة سابقة ما يوقفش المفتاح المدموج:
+     * الاعتماد بقى على علم الإطفاء اليدوي وحده.
+     */
+    private boolean cloudEnabled() {
+        if (cloudKey().isEmpty()) return false;
+        if (prefs().getBoolean(KEY_CLOUD_MANUAL, false)) {
+            return prefs().getBoolean(KEY_CLOUD_ON, false);
+        }
+        return true;
+    }
+
+    private String cloudVoice() {
+        return prefs().getString(KEY_CLOUD_VOICE, "Kore");
+    }
+
+    private File cacheDirTts() {
+        File d = new File(getCacheDir(), "tts");
+        if (!d.exists()) d.mkdirs();
+        return d;
+    }
+
+    private File cacheFile(String text, String voice) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-1");
+            byte[] h = md.digest((voice + "\n" + text).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : h) sb.append(String.format("%02x", b));
+            return new File(cacheDirTts(), sb.toString() + ".wav");
+        } catch (Exception e) {
+            return new File(cacheDirTts(), "tmp.wav");
+        }
+    }
+
+    /** ينطق عبر Gemini: يجلب الملف من الكاش أو يطلبه من الشبكة، ويرجع للمحلي لو فشل. */
+    private static String todayKey() {
+        return new java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US)
+                .format(new java.util.Date());
+    }
+
+    /** حصة موديل معيّن خلصت النهارده؟ بنتحقق لكل موديل على حدة. */
+    private boolean modelBlockedToday(String model) {
+        return todayKey().equals(prefs().getString(KEY_QUOTA_DAY + "_" + model, ""));
+    }
+
+    private void blockModelToday(String model) {
+        prefs().edit().putString(KEY_QUOTA_DAY + "_" + model, todayKey()).apply();
+    }
+
+    /** يمسح علامات الحصة كلها — بعد ما المفتاح يتغيّر أو الصوت السحابي يتفتح من جديد. */
+    private void clearQuotaMarks() {
+        android.content.SharedPreferences.Editor ed = prefs().edit();
+        ed.remove(KEY_QUOTA_DAY);
+        for (String m : CLOUD_MODELS) ed.remove(KEY_QUOTA_DAY + "_" + m);
+        ed.apply();
+    }
+
+    /** كل موديلات الصوت خلصت حصتها النهارده، فمفيش فايدة من أي طلب جديد. */
+    private boolean quotaBlockedToday() {
+        for (String m : CLOUD_MODELS) {
+            if (!modelBlockedToday(m)) return false;
+        }
+        return true;
+    }
+
+    private void cloudSpeak(final String text) {
+        if (!cloudEnabled() || cloudKey().isEmpty() || quotaBlockedToday() || text.length() > 1500) {
+            localSpeak(text);
+            return;
+        }
+        final int seq = ++speakSeq;
+        final String voice = cloudVoice();
+        final File cached = cacheFile(text, voice);
+        if (cached.exists() && cached.length() > 44) {
+            playFile(cached, seq);
+            return;
+        }
+        net.execute(() -> {
+            try {
+                byte[] wav = synth(text, voice);
+                File out = cached;
+                try (FileOutputStream fos = new FileOutputStream(out)) {
+                    fos.write(wav);
+                }
+                playFile(out, seq);
+                pruneCache();
+            } catch (Exception e) {
+                lastCloudError = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                runOnUiThread(() -> {
+                    if (seq != speakSeq) return;
+                    localSpeak(warnPrefix() + text);
+                });
+            }
+        });
+    }
+
+    /** سبب الخطأ بلغة مفهومة، بدل نص إنجليزي زي HTTP 400. */
+    private String cloudReasonAr(String err) {
+        String e = err == null ? "" : err.toLowerCase(Locale.ROOT);
+        if (e.contains("http 400") || e.contains("http 403") || e.contains("api key")) {
+            return "المفتاح مرفوض أو انتهت صلاحيته";
+        }
+        if (e.contains("http 429")) {
+            return "حصص موديلات الصوت المجانية خلصت للنهارده، وكل موديل له عدد طلبات صغير في اليوم";
+        }
+        if (e.contains("http 404")) return "خدمة الصوت مش متاحة للمفتاح ده";
+        if (e.contains("unknownhost") || e.contains("timeout") || e.contains("connect")) {
+            return "الإنترنت واصل للتطبيق";
+        }
+        if (e.startsWith("http ")) return "خدمة الصوت رجعت خطأ";
+        return "تعذر تحميل الصوت من الإنترنت";
+    }
+
+    /** تحذير صوتي مرة واحدة في كل تشغيل، قبل الرجوع لصوت الهاتف. */
+    private String warnPrefix() {
+        if (cloudWarned) return "";
+        cloudWarned = true;
+        return "تنبيه من اللعبة: الصوت السحابي فيه مشكلة، " + cloudReasonAr(lastCloudError)
+                + ". هقرأ بصوت الهاتف دلوقتي. تقدر تعرف التفاصيل من الإعدادات، حالة الصوت السحابي. ";
+    }
+
+    /** يجرب الموديلات بالترتيب: موديل خلصت حصته اليومية ما يوقفش الصوت كله. */
+    private byte[] synth(String text, String voice) throws Exception {
+        Exception last = null;
+        for (String model : CLOUD_MODELS) {
+            if (modelBlockedToday(model)) continue;
+            try {
+                return synthOnce(model, text, voice);
+            } catch (Exception e) {
+                String m = e.getMessage() == null ? "" : e.getMessage().toLowerCase(Locale.ROOT);
+                if (!m.contains("http 429")) throw e;
+                last = e;
+                // الحصة اليومية بتقفل الموديل لبكرة. حصة الدقيقة بتعدي، فبنجرب اللي بعده بس.
+                if (m.contains("per day") || m.contains("per_day")) blockModelToday(model);
+            }
+        }
+        if (last != null) throw last;
+        throw new Exception("HTTP 429: كل موديلات الصوت خلصت حصتها النهارده");
+    }
+
+    private byte[] synthOnce(String model, String text, String voice) throws Exception {
+        JSONObject body = new JSONObject();
+        JSONObject textPart = new JSONObject().put("text", text);
+        JSONObject content = new JSONObject()
+                .put("parts", new JSONArray().put(textPart));
+        body.put("contents", new JSONArray().put(content));
+
+        JSONObject voiceCfg = new JSONObject()
+                .put("prebuiltVoiceConfig", new JSONObject().put("voiceName", voice));
+        JSONObject speechCfg = new JSONObject().put("voiceConfig", voiceCfg);
+        body.put("generationConfig", new JSONObject()
+                .put("responseModalities", new JSONArray().put("AUDIO"))
+                .put("speechConfig", speechCfg));
+
+        HttpURLConnection c = (HttpURLConnection) new URL(
+                GEMINI_BASE + model + ":generateContent?key=" + cloudKey()).openConnection();
+        c.setRequestMethod("POST");
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(60000);
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        try (OutputStream os = c.getOutputStream()) {
+            os.write(body.toString().getBytes(StandardCharsets.UTF_8));
+        }
+
+        int code = c.getResponseCode();
+        InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+        String resp = readAll(in);
+        if (code >= 400) {
+            throw new Exception("HTTP " + code + ": " + crop(resp));
+        }
+
+        JSONObject json = new JSONObject(resp);
+        JSONArray cands = json.optJSONArray("candidates");
+        if (cands == null || cands.length() == 0) throw new Exception("لا يوجد صوت في الرد");
+        JSONArray parts = cands.getJSONObject(0).getJSONObject("content").getJSONArray("parts");
+        JSONObject inline = null;
+        for (int i = 0; i < parts.length(); i++) {
+            JSONObject p = parts.getJSONObject(i);
+            if (p.has("inlineData")) { inline = p.getJSONObject("inlineData"); break; }
+        }
+        if (inline == null) throw new Exception("الرد لا يحتوي صوتًا");
+        byte[] data = Base64.decode(inline.getString("data"), Base64.DEFAULT);
+        // الموديلات الجديدة بترجع WAV جاهز، والقديمة بترجع PCM خام محتاج رأس WAV.
+        if (data.length > 12 && data[0] == 'R' && data[1] == 'I'
+                && data[2] == 'F' && data[3] == 'F') {
+            return data;
+        }
+        return pcmToWav(data, 24000, 1, 16);
+    }
+
+    private static String readAll(InputStream in) throws Exception {
+        if (in == null) return "";
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        in.close();
+        return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private static String crop(String s) {
+        if (s == null) return "";
+        return s.length() > 200 ? s.substring(0, 200) : s;
+    }
+
+    private static byte[] pcmToWav(byte[] pcm, int rate, int channels, int bits) {
+        int byteRate = rate * channels * bits / 8;
+        int dataLen = pcm.length;
+        int total = 44 + dataLen;
+        byte[] w = new byte[total];
+        w[0] = 'R'; w[1] = 'I'; w[2] = 'F'; w[3] = 'F';
+        putInt(w, 4, total - 8);
+        w[8] = 'W'; w[9] = 'A'; w[10] = 'V'; w[11] = 'E';
+        w[12] = 'f'; w[13] = 'm'; w[14] = 't'; w[15] = ' ';
+        putInt(w, 16, 16);
+        putShort(w, 20, 1);
+        putShort(w, 22, channels);
+        putInt(w, 24, rate);
+        putInt(w, 28, byteRate);
+        putShort(w, 32, channels * bits / 8);
+        putShort(w, 34, bits);
+        w[36] = 'd'; w[37] = 'a'; w[38] = 't'; w[39] = 'a';
+        putInt(w, 40, dataLen);
+        System.arraycopy(pcm, 0, w, 44, dataLen);
+        return w;
+    }
+
+    private static void putInt(byte[] b, int off, int v) {
+        b[off] = (byte) (v & 0xff);
+        b[off + 1] = (byte) ((v >> 8) & 0xff);
+        b[off + 2] = (byte) ((v >> 16) & 0xff);
+        b[off + 3] = (byte) ((v >> 24) & 0xff);
+    }
+
+    private static void putShort(byte[] b, int off, int v) {
+        b[off] = (byte) (v & 0xff);
+        b[off + 1] = (byte) ((v >> 8) & 0xff);
+    }
+
+    private void playFile(final File f, final int seq) {
+        runOnUiThread(() -> {
+            if (seq != speakSeq) return;
+            stopPlayer();
+            try {
+                player = new MediaPlayer();
+                player.setDataSource(f.getAbsolutePath());
+                player.setOnCompletionListener(mp -> stopPlayer());
+                player.setOnErrorListener((mp, what, extra) -> { stopPlayer(); return true; });
+                player.prepare();
+                player.start();
+            } catch (Exception e) {
+                lastCloudError = "تعذر تشغيل الصوت: " + e.getMessage();
+                stopPlayer();
+            }
+        });
+    }
+
+    private void stopPlayer() {
+        try {
+            if (player != null) {
+                if (player.isPlaying()) player.stop();
+                player.release();
+            }
+        } catch (Exception ignored) {
+        }
+        player = null;
+    }
+
+    private void pruneCache() {
+        File[] files = cacheDirTts().listFiles();
+        if (files == null || files.length <= 400) return;
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        for (int i = 0; i < files.length - 300; i++) files[i].delete();
+    }
+
+    private class Bridge {
+
+        @JavascriptInterface
+        public boolean hasScreenReader() {
+            return screenReader;
+        }
+
+        @JavascriptInterface
+        public void speak(String text) {
+            if (text == null || text.trim().isEmpty()) return;
+            if (cloudReady()) {
+                cloudSpeak(text);
+                return;
+            }
+            localSpeak(text);
+        }
+
+        @JavascriptInterface
+        public void stopSpeaking() {
+            speakSeq++;
+            stopPlayer();
+            if (ttsReady) tts.stop();
+        }
+
+        /* ---------- محركات النطق ---------- */
+
+        /** كل محركات النطق المتسطبة على الجهاز — جوجل، MultiTTS، غيرها. */
+        @JavascriptInterface
+        public String listEngines() {
+            JSONArray arr = new JSONArray();
+            List<String> seen = new ArrayList<>();
+            try {
+                if (tts != null) {
+                    List<TextToSpeech.EngineInfo> engines = tts.getEngines();
+                    for (TextToSpeech.EngineInfo e : engines) {
+                        JSONObject o = new JSONObject();
+                        o.put("pkg", e.name);
+                        String label = e.label == null ? "" : e.label.trim();
+                        if (label.isEmpty()) label = e.name;
+                        o.put("label", label);
+                        o.put("current", e.name.equals(engineUsed));
+                        arr.put(o);
+                        seen.add(e.name);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            // لو المحرك ما رجّعش قائمة، نسأل النظام مباشرة عن كل محركات النطق المثبتة.
+            if (arr.length() == 0) {
+                try {
+                    android.content.Intent probe = new android.content.Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE);
+                    List<android.content.pm.ResolveInfo> found =
+                            getPackageManager().queryIntentServices(probe, 0);
+                    for (android.content.pm.ResolveInfo ri : found) {
+                        if (ri.serviceInfo == null) continue;
+                        String pkg = ri.serviceInfo.packageName;
+                        if (pkg == null || seen.contains(pkg)) continue;
+                        JSONObject o = new JSONObject();
+                        o.put("pkg", pkg);
+                        CharSequence lab = ri.serviceInfo.loadLabel(getPackageManager());
+                        String label = lab == null ? "" : lab.toString().trim();
+                        o.put("label", label.isEmpty() ? pkg : label);
+                        o.put("current", pkg.equals(engineUsed));
+                        arr.put(o);
+                        seen.add(pkg);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+            // المحرك الشغال لازم يظهر في القائمة حتى لو القائمة رجعت فاضية.
+            if (arr.length() == 0 && engineUsed != null && !engineUsed.isEmpty()) {
+                try {
+                    JSONObject o = new JSONObject();
+                    o.put("pkg", engineUsed);
+                    o.put("label", engineLabel(engineUsed));
+                    o.put("current", true);
+                    arr.put(o);
+                } catch (Exception ignored) {
+                }
+            }
+            return arr.toString();
+        }
+
+        /** يفتح إعدادات النطق في أندرويد — لتثبيت الأصوات أو اختيار محرك افتراضي. */
+        @JavascriptInterface
+        public boolean openTtsSettings() {
+            String[] actions = {"com.android.settings.TTS_SETTINGS", android.provider.Settings.ACTION_SETTINGS};
+            for (String a : actions) {
+                try {
+                    android.content.Intent i = new android.content.Intent(a);
+                    i.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(i);
+                    return true;
+                } catch (Exception ignored) {
+                }
+            }
+            return false;
+        }
+
+        /** رقم إصدار التطبيق كما هو مثبت على الهاتف. */
+        @JavascriptInterface
+        public String appVersion() {
+            try {
+                android.content.pm.PackageInfo pi = getPackageManager().getPackageInfo(getPackageName(), 0);
+                return pi.versionName + " (" + pi.versionCode + ")";
+            } catch (Exception e) {
+                return "?";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean setEngine(String pkg) {
+            if (pkg == null || pkg.trim().isEmpty()) return false;
+            final String target = pkg.trim();
+            getSharedPreferences(PREF, MODE_PRIVATE).edit().putString(KEY_ENGINE, target).apply();
+            runOnUiThread(() -> {
+                try {
+                    if (tts != null) tts.shutdown();
+                } catch (Exception ignored) {
+                }
+                tts = null;
+                ttsReady = false;
+                triedFallback = false;
+                currentVoice = "";
+                initTts(target);
+            });
+            return true;
+        }
+
+        /* ---------- الصوت السحابي ---------- */
+
+        /** هل الصوت السحابي مفعّل وله مفتاح؟ */
+        @JavascriptInterface
+        public boolean cloudReady() {
+            return cloudEnabled() && !cloudKey().isEmpty();
+        }
+
+        /** حالة الصوت السحابي للتطبيق: مفعّل، صوت، ومفتاح محفوظ. */
+        @JavascriptInterface
+        public String cloudStatus() {
+            JSONObject o = new JSONObject();
+            try {
+                String k = cloudKey();
+                o.put("enabled", cloudEnabled());
+                o.put("hasKey", !k.isEmpty());
+                o.put("builtin", !builtinKey().isEmpty());
+                String userKey = prefs().getString(KEY_CLOUD_KEY, "");
+                o.put("keyHint", userKey == null || userKey.isEmpty() ? ""
+                        : ("…" + userKey.substring(Math.max(0, userKey.length() - 4))));
+                o.put("voice", cloudVoice());
+                o.put("error", lastCloudError);
+                o.put("errorAr", lastCloudError.isEmpty() ? "" : cloudReasonAr(lastCloudError));
+                int freeModels = 0;
+                for (String m : CLOUD_MODELS) if (!modelBlockedToday(m)) freeModels++;
+                o.put("modelsFree", freeModels);
+                String st;
+                if (!o.getBoolean("hasKey")) {
+                    st = "الصوت السحابي مش مفعّل: مفيش مفتاح جوه التطبيق.";
+                } else if (!o.getBoolean("enabled")) {
+                    st = "المفتاح موجود، لكن الصوت السحابي مقفول من الإعدادات.";
+                } else {
+                    st = "الصوت السحابي مفعّل، والمفتاح "
+                            + (o.getBoolean("builtin") ? "مدموج جوه التطبيق" : "محفوظ")
+                            + "، والصوت المختار " + cloudVoice() + "، وفاضل "
+                            + freeModels + " من " + CLOUD_MODELS.length
+                            + " موديلات صوت عندهم حصة النهارده.";
+                    if (quotaBlockedToday()) {
+                        st += " حصص الموديلات كلها خلصت، فالتطبيق بيقرأ بصوت الهاتف لحد بكرة.";
+                    } else if (!lastCloudError.isEmpty()) {
+                        st += " لكن آخر محاولة فشلت: " + cloudReasonAr(lastCloudError) + ".";
+                    } else {
+                        st += " لسه مفيش خطأ مسجّل.";
+                    }
+                }
+                o.put("statusAr", st);
+            } catch (Exception ignored) {
+            }
+            return o.toString();
+        }
+
+        @JavascriptInterface
+        public boolean setCloudKey(String key) {
+            String k = key == null ? "" : key.trim();
+            prefs().edit().putString(KEY_CLOUD_KEY, k)
+                    .putBoolean(KEY_CLOUD_ON, !k.isEmpty())
+                    .putBoolean(KEY_CLOUD_MANUAL, k.isEmpty())
+                    .apply();
+            clearQuotaMarks();
+            lastCloudError = "";
+            cloudWarned = false;
+            return !k.isEmpty();
+        }
+
+        @JavascriptInterface
+        public void clearCloudKey() {
+            prefs().edit().remove(KEY_CLOUD_KEY)
+                    .putBoolean(KEY_CLOUD_ON, false)
+                    .putBoolean(KEY_CLOUD_MANUAL, true).apply();
+            stopSpeaking();
+        }
+
+        @JavascriptInterface
+        public void setCloudEnabled(boolean on) {
+            prefs().edit().putBoolean(KEY_CLOUD_ON, on)
+                    .putBoolean(KEY_CLOUD_MANUAL, true).apply();
+            clearQuotaMarks();
+            lastCloudError = "";
+            cloudWarned = false;
+            if (!on) stopSpeaking();
+        }
+
+        @JavascriptInterface
+        public boolean setCloudVoice(String name) {
+            if (name == null || name.trim().isEmpty()) return false;
+            prefs().edit().putString(KEY_CLOUD_VOICE, name.trim()).apply();
+            return true;
+        }
+
+        @JavascriptInterface
+        public void testCloud() {
+            speak("مرحبًا وعد. هذا هو الصوت السحابي الجديد. تربية الأطفال بتتكلم بصوت أنقى.");
+        }
+
+        @JavascriptInterface
+        public String cloudError() {
+            return lastCloudError;
+        }
+
+        /** معلومات الصوت الحالي — يعرضها التطبيق في الإعدادات. */
+        @JavascriptInterface
+        public String voiceInfo() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("engine", engineUsed == null ? "" : engineUsed);
+                o.put("engineLabel", engineLabel(engineUsed));
+                o.put("chosen", currentVoice);
+                if (ttsReady) {
+                    Voice v = tts.getVoice();
+                    if (v != null) {
+                        o.put("name", v.getName());
+                        o.put("locale", v.getLocale().toString());
+                        o.put("network", v.isNetworkConnectionRequired());
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            return o.toString();
+        }
+
+        /** كل الأصوات العربية المثبتة على الجهاز. */
+        @JavascriptInterface
+        public String listArabicVoices() {
+            JSONArray arr = new JSONArray();
+            if (!ttsReady) return arr.toString();
+            try {
+                Set<Voice> voices = tts.getVoices();
+                if (voices == null) return arr.toString();
+                List<Voice> list = new ArrayList<>(voices);
+                Collections.sort(list, (a, b) -> a.getName().compareTo(b.getName()));
+                for (Voice v : list) {
+                    if (!"ar".equals(v.getLocale().getLanguage())) continue;
+                    JSONObject o = new JSONObject();
+                    o.put("name", v.getName());
+                    o.put("locale", v.getLocale().toString());
+                    o.put("network", v.isNetworkConnectionRequired());
+                    o.put("quality", v.getQuality());
+                    arr.put(o);
+                }
+            } catch (Exception ignored) {
+            }
+            return arr.toString();
+        }
+
+        @JavascriptInterface
+        public boolean setVoice(String name) {
+            if (!ttsReady || name == null) return false;
+            try {
+                Set<Voice> voices = tts.getVoices();
+                if (voices == null) return false;
+                for (Voice v : voices) {
+                    if (v.getName().equals(name)) {
+                        tts.setVoice(v);
+                        currentVoice = name;
+                        getSharedPreferences(PREF, MODE_PRIVATE)
+                                .edit().putString(KEY_VOICE, name).apply();
+                        return true;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            return false;
+        }
+
+        @JavascriptInterface
+        public void testVoice() {
+            speak("مرحبًا، هذا هو الصوت المختار. تربية الأطفال تعمل الآن بالكلام. " +
+                    "رصيدك ألف وخمسمئة عملة.");
+        }
+
+        @JavascriptInterface
+        public void vibrate(int ms) {
+            try {
+                Vibrator v = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                if (v != null && v.hasVibrator()) v.vibrate(ms);
+            } catch (Exception ignored) {
+            }
+        }
+
+        @JavascriptInterface
+        public void finishApp() {
+            runOnUiThread(MainActivity.this::finish);
+        }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_BACK && web != null && web.canGoBack()) {
+            web.goBack();
+            return true;
+        }
+        return super.onKeyDown(keyCode, event);
+    }
+
+    @Override
+    protected void onDestroy() {
+        stopPlayer();
+        net.shutdownNow();
+        if (tts != null) {
+            tts.stop();
+            tts.shutdown();
+        }
+        if (web != null) {
+            web.destroy();
+        }
+        super.onDestroy();
+    }
+}

@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>تربية الأطفال</title>
+<style>
+:root{
+  --bg:#12180F; --panel:#1C2417; --panel2:#232D1C; --line:#3A4A2C;
+  --text:#F3F6EA; --muted:#B8C4A6; --accent:#8FD14F; --gold:#F2C94C;
+  --pink:#F49AC1; --red:#E57373;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+  font-family:"Noto Naskh Arabic","Amiri","Segoe UI",Tahoma,sans-serif;font-size:20px;line-height:1.6}
+body{padding-bottom:40px}
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:2px solid var(--line);
+  padding:10px 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+header h1{font-size:20px;margin:0;flex:1 1 auto;min-width:120px;color:var(--gold)}
+#hdr-line{width:100%;color:var(--muted);font-size:16px}
+main{padding:14px 12px;max-width:720px;margin:0 auto}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+h2{font-size:26px;margin:6px 0 14px;color:var(--gold)}
+h3{font-size:21px;margin:22px 0 10px;color:var(--accent)}
+p{margin:10px 0}
+.card{background:var(--panel);border:2px solid var(--line);border-radius:16px;padding:14px;margin:12px 0}
+.big{font-size:22px}
+.muted{color:var(--muted)}
+button{font-family:inherit;font-size:20px;color:var(--text);background:var(--panel2);
+  border:2px solid var(--line);border-radius:14px;padding:14px 16px;margin:7px 0;width:100%;
+  text-align:right;cursor:pointer;min-height:56px}
+button:focus,button:active{outline:3px solid var(--accent);outline-offset:2px}
+button.primary{background:#2C3E1F;border-color:var(--accent);font-weight:bold}
+button.back{background:transparent;border-color:var(--muted);color:var(--muted);margin-top:22px}
+button.warn{border-color:var(--red);color:#FFD7D7}
+.warn-text{color:#FFC9C9}
+button[disabled]{opacity:.55}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row button{flex:1 1 45%}
+.toast{position:fixed;left:12px;right:12px;bottom:18px;background:#2E4A1C;color:#fff;
+  border:2px solid var(--accent);border-radius:14px;padding:14px;font-size:19px;
+  opacity:0;pointer-events:none;transition:opacity .2s;z-index:20}
+.toast.show{opacity:1}
+.pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);
+  border-radius:999px;padding:2px 12px;margin:2px;font-size:16px;color:var(--muted)}
+input[type=text],input[type=password]{width:100%;font-family:inherit;font-size:18px;padding:12px;
+  border-radius:12px;border:2px solid var(--line);background:var(--panel2);color:var(--text)}
+</style>
+</head>
+<body>
+<header>
+  <h1>تربية الأطفال</h1>
+  <button id="read-screen-btn" data-act="read-screen" style="width:auto;margin:0;padding:10px 14px">اقرأ الشاشة</button>
+  <button data-act="go" data-screen="settings" style="width:auto;margin:0;padding:10px 14px">الإعدادات</button>
+  <div id="hdr-line"></div>
+</header>
+<main id="screen" tabindex="-1"></main>
+<div id="announcer" class="sr" aria-live="polite" aria-atomic="true"></div>
+<div id="alert" class="sr" aria-live="assertive" aria-atomic="true"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+/* ================= الصوت والأصوات ================= */
+var SFX_FILES = {click:'sfx/click.mp3', coin:'sfx/coin.mp3', buy:'sfx/buy.mp3',
+  success:'sfx/success.mp3', error:'sfx/error.mp3', feed:'sfx/feed.mp3',
+  morning:'sfx/morning.mp3', harvest:'sfx/harvest.mp3', water:'sfx/water.mp3',
+  wheel:'sfx/wheel.mp3', collect:'sfx/collect.mp3'};
+var sfxCache = {};
+function sfx(name){
+  try{
+    var a = sfxCache[name] || (sfxCache[name] = new Audio(SFX_FILES[name]));
+    a.currentTime = 0; a.play(); return;
+  }catch(e){}
+  try{ if(window.Native && Native.playSfx) Native.playSfx(name); }catch(e){}
+}
+function vibrate(ms){
+  try{ if(window.Native && Native.vibrate) Native.vibrate(ms || 40); }catch(e){}
+}
+
+document.addEventListener('pointerdown', function unlockAudio(){
+  document.removeEventListener('pointerdown', unlockAudio);
+  sfx('click');
+}, { once:true });
+
+function speakOut(text){
+  if(!text || !S.tts) return;
+  try{ if(window.Native && Native.speak){ Native.speak(text); return; } }catch(e){}
+  try{
+    if(window.speechSynthesis){
+      speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ar';
+      speechSynthesis.speak(u);
+    }
+  }catch(e){}
+}
+var toastTimer = null;
+function showToast(text){
+  var t = document.getElementById('toast');
+  t.textContent = text; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 4500);
+}
+function announce(text, assertive){
+  var box = document.getElementById(assertive ? 'alert' : 'announcer');
+  box.textContent = '';
+  setTimeout(function(){ box.textContent = text; }, 60);
+  speakOut(text);
+  showToast(text);
+}
+
+/* ================= قراءة الشاشة ================= */
+var screenEl = document.getElementById('screen');
+function bodyText(el){ return (el && el.textContent ? el.textContent : '').replace(/\s+/g,' ').trim(); }
+function screenSummary(){
+  var parts = [];
+  var t = bodyText(screenEl.querySelector('h2'));
+  if(t) parts.push(t);
+  var hdr = bodyText(document.getElementById('hdr-line'));
+  if(hdr) parts.push(hdr);
+  var n = screenEl.querySelectorAll('button').length;
+  parts.push('في الشاشة ' + n + ' أزرار. اضغط زرار اقرأ الشاشة في الأعلى لسماع كل المكتوب.');
+  return parts.join('. ');
+}
+function screenFullText(){
+  var parts = [], last = '';
+  var t = bodyText(screenEl.querySelector('h2'));
+  if(t){ parts.push(t); last = t; }
+  var hdr = bodyText(document.getElementById('hdr-line'));
+  if(hdr && hdr !== last){ parts.push(hdr); last = hdr; }
+  var nodes = screenEl.querySelectorAll('h2, h3, p, button, li, span');
+  for(var i = 0; i < nodes.length; i++){
+    var s = bodyText(nodes[i]);
+    if(!s || s === last) continue;
+    last = s; parts.push(s);
+  }
+  return parts.join('. ');
+}
+function readScreen(){
+  var text = screenFullText();
+  if(!text){ announce('الشاشة فاضية.'); return; }
+  if(!S.tts){
+    try{ if(window.Native && Native.speak){ Native.speak(text); return; } }catch(e){}
+  }
+  announce(text);
+}
+
+/* ================= البيانات ================= */
+var KEY = 'kidscare_v1';
+var GIRLS = ['لارين','لورين','تولين','توانا','جمانة','إيلا','إيلين','ليان','أسيل','تالا',
+  'تاليا','جودي','جويرية','جيلان','جنى','جنة','سجى','رقية','مايا','هنى','نور','حور','سيا','تالين'];
+var BOYS = ['فهد','آدم','عمر','رعد','صقر','أدهم','فارس','ياسين','زياد','علي','كريم','ريان',
+  'أيان','إياد','حمزة','تيم','سليم','مراد','كنان','راكان','أويس','تميم','تيام','آسر'];
+
+var ING = {
+  onion:{n:'بصل', p:3}, lentil:{n:'عدس', p:3}, pasta:{n:'معكرونة', p:4},
+  egg:{n:'بيض', p:3}, milk:{n:'لبن', p:3}, flour:{n:'دقيق', p:3},
+  cocoa:{n:'كاكاو', p:4}, sugar:{n:'سكر', p:2}, meat:{n:'لحمة مفرومة', p:8},
+  tomato:{n:'صلصة طماطم', p:3}, salt:{n:'ملح', p:1}, potato:{n:'بطاطس', p:3},
+  oil:{n:'زيت', p:3}
+};
+var DISHES = {
+  koshari:{n:'كشري', need:{onion:1, lentil:1, pasta:1}},
+  cake:{n:'كيك بالشوكولاتة', need:{egg:1, milk:1, flour:1, cocoa:1, sugar:1}},
+  kofta:{n:'كفتة', need:{meat:1, tomato:1, salt:1}},
+  chips:{n:'بطاطس شيبسي', need:{potato:1, salt:1, oil:1}},
+  bechamel:{n:'مكرونة بالبشاميل', need:{pasta:1, milk:1, flour:1, meat:1}}
+};
+var DRINKS = {juice:{n:'عصير', p:5}, chocmilk:{n:'لبن بالشوكولاتة', p:6}};
+var TOYS = {cat:{n:'قطة', p:25}, blocks:{n:'مكعبات', p:20}, car:{n:'عربية', p:30}};
+var CLOTHES = {reddress:'فستان أحمر', pajama:'بيجامة صغيرة ذهبية', suit:'بدلة صغيرة زمردية',
+  shirt:'قميص صغير أزرق', shortred:'فستان قصير أحمر', pearl:'فستان لؤلؤي'};
+var HAPPY_CAP = 50;
+
+function fresh(){
+  return {
+    child:null, coins:60, happiness:10, diapers:2,
+    ing:{}, meals:{}, drinks:{}, toys:[], clothes:[], wearing:null,
+    soothe:false, resting:false, washed:false, health:true,
+    washing:false, checking:false, tts:true
+  };
+}
+var S = fresh();
+function load(){
+  try{
+    var raw = localStorage.getItem(KEY);
+    if(!raw) return;
+    var o = JSON.parse(raw);
+    for(var k in S){ if(o.hasOwnProperty(k) && o[k] !== null) S[k] = o[k]; }
+  }catch(e){}
+}
+function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+function fmt(n){ return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+function kidWord(){ return S.child ? (S.child.gender === 'f' ? 'الطفلة' : 'الطفل') : 'الطفل'; }
+function kidName(){ return S.child ? S.child.name : ''; }
+
+function addHappy(n){
+  S.happiness = Math.min(HAPPY_CAP, S.happiness + n);
+}
+function earn(n){ S.coins += n; }
+function spend(n){
+  if(S.coins < n){ announce('رصيدك مش كفاية. عندك ' + fmt(S.coins) + ' عملة بس.', true); sfx('error'); return false; }
+  S.coins -= n; return true;
+}
+function haveIng(id){ return (S.ing[id] || 0) > 0; }
+function canCook(id){
+  var need = DISHES[id].need;
+  for(var k in need){ if((S.ing[k] || 0) < need[k]) return false; }
+  return true;
+}
+
+/* ================= التنقل ================= */
+var view = 'home';
+function title(t){ return '<h2 tabindex="-1" data-key="title">' + t + '</h2>'; }
+function backBtn(to){
+  return '<button class="back" data-act="go" data-screen="' + (to || 'home') + '" data-key="back">رجوع</button>';
+}
+function childWordName(){
+  if(!S.child) return '';
+  return (S.child.gender === 'f' ? 'الطفلة ' : 'الطفل ') + S.child.name;
+}
+
+function updateHeader(){
+  var bits = ['العملات: ' + fmt(S.coins)];
+  if(S.child){
+    bits.push('السعادة: ' + S.happiness + ' من ' + HAPPY_CAP);
+    bits.push((S.child.gender === 'f' ? 'الطفلة: ' : 'الطفل: ') + S.child.name);
+    bits.push(S.health ? 'الصحة جيدة' : 'الصحة سيئة');
+  } else {
+    bits.push('لسه مفيش طفل');
+  }
+  document.getElementById('hdr-line').textContent = bits.join(' • ');
+}
+function render(){
+  var fn = SCREENS[view] || SCREENS.home;
+  screenEl.innerHTML = fn();
+  updateHeader();
+  var h = screenEl.querySelector('h2');
+  if(h) h.focus();
+}
+function rerender(msg, key){
+  var fn = SCREENS[view] || SCREENS.home;
+  screenEl.innerHTML = fn();
+  updateHeader();
+  if(key){
+    var b = screenEl.querySelector('[data-key="' + key + '"]');
+    if(b) b.focus();
+  }
+  if(msg) announce(msg);
+  save();
+}
+function go(name){
+  view = name;
+  render();
+  window.scrollTo(0,0);
+  announce(screenSummary());
+}
+
+/* ================= الشاشات ================= */
+var SCREENS = {};
+
+SCREENS.home = function(){
+  var html = title('تربية الأطفال');
+  if(S.child){
+    html += '<div class="card"><p class="big">' + childWordName() + '</p>' +
+      '<p>السعادة ' + S.happiness + ' من ' + HAPPY_CAP + ' • الصحة ' +
+      (S.health ? 'جيدة' : 'سيئة') +
+      (S.wearing ? ' • لابسة ' + CLOTHES[S.wearing] : '') + '</p>' +
+      '<p class="muted">الحفاضات: ' + S.diapers + ' • الوجبات الجاهزة: ' + mealCount() +
+      ' • المشروبات: ' + drinkCount() + '</p></div>';
+  } else {
+    html += '<div class="card"><p class="big">أهلاً بيكي. اختاري الأول: تبني طفلة ولا طفل؟</p></div>';
+  }
+  html += '<h3>الأقسام</h3>' +
+    '<button class="primary" data-act="go" data-screen="girls" data-key="girls">تبني طفلة</button>' +
+    '<button class="primary" data-act="go" data-screen="boys" data-key="boys">تبني طفل</button>';
+  if(S.child){
+    html += '<button data-act="go" data-screen="childroom" data-key="childroom">غرفة الطفل</button>' +
+      '<button data-act="go" data-screen="living" data-key="living">غرفة الجلوس</button>' +
+      '<button data-act="go" data-screen="shop" data-key="shop">المتجر</button>' +
+      '<button data-act="go" data-screen="care" data-key="care">الرعاية</button>';
+  }
+  return html;
+};
+
+SCREENS.girls = function(){
+  var h = title('تبني طفلة');
+  h += '<p class="muted">اختاري اسم الطفلة.</p>';
+  for(var i = 0; i < GIRLS.length; i++){
+    h += '<button data-act="adopt" data-gender="f" data-name="' + GIRLS[i] + '" data-key="n' + i + '">' + GIRLS[i] + '</button>';
+  }
+  return h + backBtn('home');
+};
+SCREENS.boys = function(){
+  var h = title('تبني طفل');
+  h += '<p class="muted">اختاري اسم الطفل.</p>';
+  for(var i = 0; i < BOYS.length; i++){
+    h += '<button data-act="adopt" data-gender="m" data-name="' + BOYS[i] + '" data-key="n' + i + '">' + BOYS[i] + '</button>';
+  }
+  return h + backBtn('home');
+};
+
+SCREENS.childroom = function(){
+  if(!S.child) return needChild();
+  var h = title('غرفة ' + kidName());
+  h += '<div class="card"><p>' + childWordName() + ' في الغرفة. السعادة ' + S.happiness + ' من ' + HAPPY_CAP + '.</p>' +
+    (S.health ? '' : '<p class="warn-text">' + kidWord() + ' تعبانة. روحي قسم الرعاية.</p>') + '</div>';
+  h += '<button data-act="go" data-screen="bathroom" data-key="bathroom">الحمام</button>' +
+    '<button data-act="go" data-screen="kitchen" data-key="kitchen">المطبخ</button>' +
+    '<button data-act="go" data-screen="bed" data-key="bed">السرير</button>' +
+    '<button data-act="go" data-screen="swing" data-key="swing">الأرجوحة</button>' +
+    '<button data-act="go" data-screen="wardrobe" data-key="wardrobe">الدولاب</button>' +
+    '<button data-act="go" data-screen="toyshelf" data-key="toyshelf">رف الألعاب</button>';
+  return h + backBtn('home');
+};
+
+SCREENS.bathroom = function(){
+  if(!S.child) return needChild();
+  var h = title('الحمام');
+  h += '<button data-act="toilet" data-key="toilet">المرحاض</button>' +
+    '<button data-act="changeDiaper" data-key="diaper">تغيير الحفاضة (عندك ' + S.diapers + ')</button>' +
+    '<button data-act="go" data-screen="wipes" data-key="wipes">المناديل المبللة</button>';
+  return h + backBtn('childroom');
+};
+SCREENS.wipes = function(){
+  var h = title('المناديل المبللة');
+  var labels = ['منديل واحد','منديلان','ثلاثة مناديل','أربعة مناديل','خمسة مناديل'];
+  for(var i = 0; i < 5; i++){
+    h += '<button data-act="wipe" data-n="' + (i+1) + '" data-key="w' + i + '">' + labels[i] + '</button>';
+  }
+  return h + backBtn('bathroom');
+};
+
+SCREENS.kitchen = function(){
+  if(!S.child) return needChild();
+  var h = title('المطبخ');
+  h += '<button data-act="wash" data-key="wash">' + (S.washed ? 'غسل المواعين (اتغسلت خلاص)' : 'غسل المواعين') + '</button>' +
+    '<button data-act="go" data-screen="cook" data-key="cook">طبخ أكلة</button>';
+  return h + backBtn('childroom');
+};
+SCREENS.cook = function(){
+  var h = title('طبخ أكلة');
+  h += '<p class="muted">اختاري الأكلة. لو المكونات مش كفاية هنقولك.</p>';
+  var i = 0;
+  for(var id in DISHES){
+    var d = DISHES[id];
+    h += '<button data-act="cook" data-dish="' + id + '" data-key="d' + (i++) + '"' +
+      (canCook(id) ? '' : ' class="muted"') + '>' + d.n + ' — ' + needText(id) + '</button>';
+  }
+  return h + backBtn('kitchen');
+};
+SCREENS.bed = function(){
+  if(!S.child) return needChild();
+  var h = title('السرير');
+  h += '<div class="card"><p>' + (S.resting ? childWordName() + ' نايمة وبتاخد راحة.' : childWordName() + ' صاحية.') + '</p></div>';
+  h += S.resting
+    ? '<button class="primary" data-act="wake" data-key="wake">إيقاظ ' + kidName() + '</button>'
+    : '<button class="primary" data-act="sleep" data-key="sleep">خلي ' + kidName() + ' ترتاح</button>';
+  return h + backBtn('childroom');
+};
+SCREENS.swing = function(){
+  if(!S.child) return needChild();
+  var h = title('الأرجوحة');
+  h += '<div class="card"><p>الأرجوحة بتفرح ' + kidWord() + '.</p></div>' +
+    '<button class="primary" data-act="swing" data-key="swing">استخدمي الأرجوحة</button>';
+  return h + backBtn('childroom');
+};
+SCREENS.toyshelf = function(){
+  if(!S.child) return needChild();
+  var h = title('رف الألعاب');
+  if(!S.toys.length){
+    h += '<div class="card"><p>الرف فاضي. اشتري ألعاب من المتجر وهرجع هنا.</p></div>';
+    h += '<button data-act="go" data-screen="shoptoy" data-key="shoptoy">المتجر — الألعاب</button>';
+  } else {
+    for(var i = 0; i < S.toys.length; i++){
+      var t = TOYS[S.toys[i]];
+      if(!t) continue;
+      h += '<button data-act="play" data-toy="' + S.toys[i] + '" data-key="t' + i + '">' +
+        t.n + ' — اللعب بهذه اللعبة</button>';
+    }
+  }
+  return h + backBtn('childroom');
+};
+SCREENS.wardrobe = function(){
+  if(!S.child) return needChild();
+  var h = title('الدولاب');
+  var owned = S.clothes || [];
+  if(!owned.length){
+    h += '<div class="card"><p>الدولاب فاضي. اشتري هدوم من المتجر.</p></div>';
+    h += '<button data-act="go" data-screen="shopclothes" data-key="shopclothes">المتجر — ملابس الأطفال</button>';
+  } else {
+    for(var i = 0; i < owned.length; i++){
+      var id = owned[i];
+      h += '<button data-act="wear" data-cloth="' + id + '" data-key="c' + i + '">' +
+        CLOTHES[id] + (S.wearing === id ? ' — لابساها' : ' — ارتداء') + '</button>';
+    }
+  }
+  return h + backBtn('childroom');
+};
+
+SCREENS.living = function(){
+  if(!S.child) return needChild();
+  var h = title('غرفة الجلوس');
+  h += '<button data-act="go" data-screen="table" data-key="table">طاولة الطعام</button>' +
+    '<button data-act="go" data-screen="snacks" data-key="snacks">طاولة التسالي والمشروبات</button>';
+  return h + backBtn('home');
+};
+SCREENS.table = function(){
+  var h = title('طاولة الطعام');
+  var any = false;
+  for(var id in DISHES){
+    var n = S.meals[id] || 0;
+    if(n > 0){
+      any = true;
+      h += '<button data-act="eat" data-dish="' + id + '" data-key="e' + id + '">' +
+        DISHES[id].n + ' (' + n + ') — أكل هذه الوجبة</button>';
+    }
+  }
+  if(!any) h += '<div class="card"><p>مفيش وجبات جاهزة. اطبخي من المطبخ الأول.</p></div>' +
+    '<button data-act="go" data-screen="cook" data-key="cook">طبخ أكلة</button>';
+  return h + backBtn('living');
+};
+SCREENS.snacks = function(){
+  var h = title('طاولة التسالي والمشروبات');
+  var any = false;
+  for(var id in DRINKS){
+    var n = S.drinks[id] || 0;
+    if(n > 0){
+      any = true;
+      h += '<button data-act="drink" data-drink="' + id + '" data-key="k' + id + '">' +
+        DRINKS[id].n + ' (' + n + ') — شرب هذا المشروب</button>';
+    }
+  }
+  if(!any) h += '<div class="card"><p>مفيش مشروبات. اشتريها من المتجر.</p></div>' +
+    '<button data-act="go" data-screen="shopdrinks" data-key="shopdrinks">المتجر — المشروبات</button>';
+  return h + backBtn('living');
+};
+
+SCREENS.shop = function(){
+  var h = title('المتجر');
+  h += '<div class="card"><p>رصيدك ' + fmt(S.coins) + ' عملة.</p></div>';
+  h += '<button data-act="go" data-screen="shopneeds" data-key="needs">مستلزمات ' + (S.child && S.child.gender === 'm' ? 'الطفل' : 'الطفلة') + '</button>' +
+    '<button data-act="go" data-screen="shopclothes" data-key="clothes">ملابس الأطفال</button>' +
+    '<button data-act="go" data-screen="shoping" data-key="ing">مكونات الطعام</button>' +
+    '<button data-act="go" data-screen="shopdrinks" data-key="drinks">المشروبات</button>' +
+    '<button data-act="go" data-screen="shoptoy" data-key="toys">الألعاب</button>';
+  return h + backBtn('home');
+};
+SCREENS.shopneeds = function(){
+  var h = title('مستلزمات ' + (S.child && S.child.gender === 'm' ? 'الطفل' : 'الطفلة'));
+  h += '<button data-act="buyDiapers" data-key="a">شراء حفاضات — 5 حفاضات بـ 10 عملات (عندك ' + S.diapers + ')</button>' +
+    '<button data-act="buySoothe" data-key="b">' + (S.soothe ? 'لعبة تسكيت الأطفال (اشتريتيها)' : 'شراء لعبة لتسكيت الأطفال عن البكاء — 15 عملة') + '</button>';
+  return h + backBtn('shop');
+};
+SCREENS.shopclothes = function(){
+  var h = title('ملابس الأطفال');
+  var i = 0;
+  for(var id in CLOTHES){
+    var owned = S.clothes.indexOf(id) >= 0;
+    h += '<button data-act="buyCloth" data-cloth="' + id + '" data-key="l' + (i++) + '">' +
+      CLOTHES[id] + (owned ? ' — عندك' : ' — 20 عملة') + '</button>';
+  }
+  return h + backBtn('shop');
+};
+SCREENS.shoping = function(){
+  var h = title('مكونات الطعام');
+  h += '<p class="muted">كل ضغطة بتشتري مكوّن واحد.</p>';
+  var i = 0;
+  for(var id in ING){
+    var c = S.ing[id] || 0;
+    h += '<button data-act="buyIng" data-ing="' + id + '" data-key="g' + (i++) + '">' +
+      ING[id].n + ' — ' + ING[id].p + ' عملات (عندك ' + c + ')</button>';
+  }
+  return h + backBtn('shop');
+};
+SCREENS.shopdrinks = function(){
+  var h = title('المشروبات');
+  var i = 0;
+  for(var id in DRINKS){
+    h += '<button data-act="buyDrink" data-drink="' + id + '" data-key="b' + (i++) + '">' +
+      DRINKS[id].n + ' — ' + DRINKS[id].p + ' عملات (عندك ' + (S.drinks[id] || 0) + ')</button>';
+  }
+  return h + backBtn('shop');
+};
+SCREENS.shoptoy = function(){
+  var h = title('الألعاب');
+  var i = 0;
+  for(var id in TOYS){
+    var owned = S.toys.indexOf(id) >= 0;
+    h += '<button data-act="buyToy" data-toy="' + id + '" data-key="y' + (i++) + '">' +
+      TOYS[id].n + (owned ? ' — عندك' : ' — ' + TOYS[id].p + ' عملة') + '</button>';
+  }
+  return h + backBtn('shop');
+};
+
+SCREENS.care = function(){
+  if(!S.child) return needChild();
+  var h = title('الرعاية');
+  h += '<div class="card"><p>' + childWordName() + ' — ' +
+    (S.health ? 'الصحة جيدة.' : 'الصحة سيئة، محتاجة عيادة.') + '</p>' +
+    '<p class="muted">السعادة ' + S.happiness + ' من ' + HAPPY_CAP + ' • الحفاضات ' + S.diapers + '</p></div>';
+  h += '<button class="primary" data-act="check" data-key="check">فحص صحة</button>';
+  if(!S.health) h += '<button class="warn" data-act="go" data-screen="clinic" data-key="clinic">العيادة</button>';
+  h += '<button data-act="go" data-screen="childroom" data-key="room">غرفة الطفل</button>';
+  return h + backBtn('home');
+};
+SCREENS.clinic = function(){
+  var h = title('العيادة');
+  h += '<div class="card"><p>' + (S.health ? 'مفيش داعي للعيادة، الصحة جيدة.' : 'الطبيبة هتعالج ' + kidWord() + '.') + '</p></div>';
+  if(!S.health) h += '<button class="primary" data-act="treat" data-key="treat">معالجة — 10 عملات</button>';
+  h += backBtn('care');
+  return h;
+};
+
+SCREENS.settings = function(){
+  var h = title('الإعدادات');
+  h += '<h3>الصوت</h3>' +
+    '<button data-act="toggleTts" data-key="tts">النطق: ' + (S.tts ? 'شغال' : 'مقفول') + '</button>' +
+    '<button data-act="read-screen" data-key="read">اقرأ الشاشة</button>';
+  var st = '';
+  try{ st = (window.Native && Native.cloudStatus) ? Native.cloudStatus() : ''; }catch(e){}
+  h += '<h3>الصوت السحابي</h3><div class="card"><p class="muted">' + (st || 'الصوت السحابي غير متاح في النسخة دي. الصوت بيشتغل بصوت الهاتف.') + '</p></div>';
+  h += backBtn('home');
+  return h;
+};
+
+function needChild(){
+  return title('مفيش طفل لسه') +
+    '<div class="card"><p>اختاري طفلة أو طفل الأول من القائمة الرئيسية.</p></div>' +
+    '<button class="primary" data-act="go" data-screen="home" data-key="home">رجوع إلى القائمة الرئيسية</button>';
+}
+function mealCount(){ var n = 0; for(var k in S.meals) n += S.meals[k]; return n; }
+function drinkCount(){ var n = 0; for(var k in S.drinks) n += S.drinks[k]; return n; }
+function needText(id){
+  var need = DISHES[id].need, out = [];
+  for(var k in need) out.push(ING[k].n + ' ' + need[k]);
+  return out.join('، ');
+}
+
+/* ================= الأفعال ================= */
+function adopt(name, gender){
+  if(S.child && S.child.name === name && S.child.gender === gender){
+    announce(kidName() + ' عندك بالفعل.');
+    return;
+  }
+  S.child = {name:name, gender:gender};
+  S.happiness = 10;
+  save();
+  view = 'childroom';
+  render();
+  announce('ربيتي ' + name + '، ' + (gender === 'f' ? 'طفلة جديدة' : 'طفل جديد') + '. أهلاً بيكي في غرفة ' + name + '.');
+  sfx('success');
+}
+
+function act(name, el){
+  switch(name){
+    case 'read-screen': readScreen(); return;
+    case 'go': go(el.getAttribute('data-screen')); return;
+    case 'adopt': adopt(el.getAttribute('data-name'), el.getAttribute('data-gender')); return;
+
+    case 'toilet': {
+      if(!S.child) return;
+      save();
+      announce('تم استخدام المرحاض.');
+      sfx('click');
+      earn(2);
+      rerender();
+      return;
+    }
+    case 'changeDiaper': {
+      if(S.diapers <= 0){
+        announce('مفيش حفاضات. اشتريها من المتجر.', true);
+        sfx('error');
+        return;
+      }
+      S.diapers--;
+      addHappy(1);
+      announce('تم تغيير الحفاضة.');
+      sfx('success');
+      rerender();
+      return;
+    }
+    case 'wipe': {
+      var n = parseInt(el.getAttribute('data-n'), 10);
+      var word = n === 1 ? 'منديل واحد' : n === 2 ? 'منديلان' : n === 3 ? 'ثلاثة مناديل' : n === 4 ? 'أربعة مناديل' : 'خمسة مناديل';
+      announce('تم استخدام ' + word + '.');
+      sfx('click');
+      save();
+      return;
+    }
+    case 'wash': {
+      if(S.washing) return;
+      if(S.washed){ announce('تم غسل المواعين بالفعل.'); return; }
+      S.washing = true;
+      rerender('بنجهز غسل المواعين. استني خمس ثواني.');
+      setTimeout(function(){
+        S.washing = false; S.washed = true; earn(5);
+        rerender('تم غسل المواعين.', 'wash');
+        sfx('success');
+      }, 5000);
+      return;
+    }
+    case 'cook': {
+      var id = el.getAttribute('data-dish');
+      var d = DISHES[id];
+      if(!canCook(id)){
+        var miss = [];
+        for(var k in d.need){ if((S.ing[k] || 0) < d.need[k]) miss.push(ING[k].n); }
+        announce('المكونات غير كافية. ناقص: ' + miss.join('، ') + '.', true);
+        sfx('error');
+        return;
+      }
+      for(var k2 in d.need) S.ing[k2] -= d.need[k2];
+      S.meals[id] = (S.meals[id] || 0) + 1;
+      announce('تم طبخ ' + d.n + '.');
+      sfx('success');
+      rerender();
+      return;
+    }
+    case 'sleep': {
+      S.resting = true;
+      announce('بدأت فترة الراحة.');
+      sfx('morning');
+      rerender();
+      return;
+    }
+    case 'wake': {
+      S.resting = false; earn(3);
+      announce('تم الاستيقاظ وبدأ يوم مليء بالنشاط.');
+      sfx('morning');
+      rerender();
+      return;
+    }
+    case 'swing': {
+      addHappy(1); earn(2);
+      announce('تم استخدام الأرجوحة وارتفعت سعادة ' + kidWord() + '.');
+      sfx('success');
+      rerender();
+      return;
+    }
+    case 'play': {
+      var toy = el.getAttribute('data-toy');
+      var before = S.happiness;
+      addHappy(1);
+      if(S.happiness === before && S.happiness >= HAPPY_CAP){
+        announce('السعادة وصلت ' + HAPPY_CAP + ' في المئة، أعلى حاجة في اللعبة.');
+      } else {
+        announce('لعبتي بـ ' + TOYS[toy].n + '. سعادة ' + kidWord() + ' بقت ' + S.happiness + ' في المئة.');
+      }
+      sfx('click');
+      rerender();
+      return;
+    }
+    case 'wear': {
+      var cl = el.getAttribute('data-cloth');
+      S.wearing = cl;
+      announce('تم إلباس ' + kidWord() + ' ' + CLOTHES[cl] + '.');
+      sfx('success');
+      rerender();
+      return;
+    }
+    case 'eat': {
+      var dish = el.getAttribute('data-dish');
+      if(!S.meals[dish]) return;
+      S.meals[dish]--;
+      addHappy(1); earn(2);
+      announce('تم أكل ' + DISHES[dish].n + '.');
+      sfx('feed');
+      rerender();
+      return;
+    }
+    case 'drink': {
+      var dr = el.getAttribute('data-drink');
+      if(!S.drinks[dr]) return;
+      S.drinks[dr]--;
+      earn(1);
+      announce('تم شرب ' + DRINKS[dr].n + '.');
+      sfx('click');
+      rerender();
+      return;
+    }
+    case 'buyDiapers': {
+      if(!spend(10)) return;
+      S.diapers += 5;
+      announce('اشتريتي حفاضات. عندك ' + S.diapers + ' حفاضة.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'buySoothe': {
+      if(S.soothe){ announce('لعبة تسكيت الأطفال عندك بالفعل.'); return; }
+      if(!spend(15)) return;
+      S.soothe = true;
+      announce('اشتريتي لعبة لتسكيت الأطفال عن البكاء.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'buyCloth': {
+      var cid = el.getAttribute('data-cloth');
+      if(S.clothes.indexOf(cid) >= 0){ announce('الهدوم دي عندك.'); return; }
+      if(!spend(20)) return;
+      S.clothes.push(cid);
+      announce('اشتريتي ' + CLOTHES[cid] + '.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'buyIng': {
+      var iid = el.getAttribute('data-ing');
+      if(!spend(ING[iid].p)) return;
+      S.ing[iid] = (S.ing[iid] || 0) + 1;
+      announce('اشتريتي ' + ING[iid].n + '. عندك ' + S.ing[iid] + '.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'buyDrink': {
+      var did = el.getAttribute('data-drink');
+      if(!spend(DRINKS[did].p)) return;
+      S.drinks[did] = (S.drinks[did] || 0) + 1;
+      announce('اشتريتي ' + DRINKS[did].n + '.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'buyToy': {
+      var tid = el.getAttribute('data-toy');
+      if(S.toys.indexOf(tid) >= 0){ announce('اللعبة دي عندك.'); return; }
+      if(!spend(TOYS[tid].p)) return;
+      S.toys.push(tid);
+      announce('اشتريتي ' + TOYS[tid].n + '.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'check': {
+      if(S.checking) return;
+      S.checking = true;
+      rerender('بنجهز فحص الصحة. استني خمس ثواني.');
+      setTimeout(function(){
+        S.checking = false;
+        var good = Math.random() < 0.7;
+        S.health = good;
+        save();
+        rerender(good ? 'صحة ' + kidWord() + ' جيدة.' : 'صحة ' + kidWord() + ' سيئة. روحي العيادة.',
+          good ? 'check' : 'clinic');
+        sfx(good ? 'success' : 'error');
+      }, 5000);
+      return;
+    }
+    case 'treat': {
+      if(S.health){ announce('الصحة جيدة، مفيش داعي للعلاج.'); return; }
+      if(!spend(10)) return;
+      S.health = true;
+      announce('تم علاج ' + kidWord() + '. الصحة بقت جيدة.');
+      sfx('success');
+      view = 'care';
+      rerender();
+      return;
+    }
+    case 'toggleTts': {
+      S.tts = !S.tts;
+      save();
+      rerender(S.tts ? 'النطق شغال.' : 'النطق مقفول.');
+      return;
+    }
+    case 'back': {
+      history.back(); return;
+    }
+  }
+}
+
+document.addEventListener('click', function(e){
+  var el = e.target;
+  while(el && el !== document.body){
+    if(el.getAttribute && el.getAttribute('data-act')){
+      act(el.getAttribute('data-act'), el);
+      return;
+    }
+    el = el.parentNode;
+  }
+});
+
+document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape'){ go('home'); }
+});
+
+load();
+render();
+</script>
+</body>
+</html>
