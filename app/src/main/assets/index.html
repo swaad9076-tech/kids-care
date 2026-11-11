@@ -64,7 +64,7 @@ input[type=text],input[type=password]{width:100%;font-family:inherit;font-size:1
 var SFX_FILES = {click:'sfx/click.mp3', coin:'sfx/coin.mp3', buy:'sfx/buy.mp3',
   success:'sfx/success.mp3', error:'sfx/error.mp3', feed:'sfx/feed.mp3',
   morning:'sfx/morning.mp3', harvest:'sfx/harvest.mp3', water:'sfx/water.mp3',
-  wheel:'sfx/wheel.mp3', collect:'sfx/collect.mp3'};
+  wheel:'sfx/wheel.mp3', collect:'sfx/collect.mp3', cry:'sfx/cry.mp3'};
 var sfxCache = {};
 function sfx(name){
   try{
@@ -167,9 +167,16 @@ var DISHES = {
   bechamel:{n:'مكرونة بالبشاميل', need:{pasta:1, milk:1, flour:1, meat:1}}
 };
 var DRINKS = {juice:{n:'عصير', p:5}, chocmilk:{n:'لبن بالشوكولاتة', p:6}};
-var TOYS = {cat:{n:'قطة', p:25}, blocks:{n:'مكعبات', p:20}, car:{n:'عربية', p:30}};
+var TOYS = {cat:{n:'قطة', p:25}, blocks:{n:'مكعبات', p:20}, car:{n:'عربية', p:30},
+  toktok:{n:'توك توك', p:40}, moto:{n:'موتوسيكل', p:35}, colorblocks:{n:'مكعبات ألوان', p:22}};
 var CLOTHES = {reddress:'فستان أحمر', pajama:'بيجامة صغيرة ذهبية', suit:'بدلة صغيرة زمردية',
-  shirt:'قميص صغير أزرق', shortred:'فستان قصير أحمر', pearl:'فستان لؤلؤي'};
+  shirt:'قميص صغير أزرق', shortred:'فستان قصير أحمر', pearl:'فستان لؤلؤي',
+  silver:'بيجامة فضية', royal:'فستان ملكي طويل'};
+var WHEEL_PRIZE = 50000000;
+var NEWDAY_COINS = 55;
+var PLAY_COINS = 55;
+var EAT_COINS = 70;
+var EAT_HAPPY = 10;
 var HAPPY_CAP = 50;
 
 function fresh(){
@@ -177,7 +184,7 @@ function fresh(){
     child:null, coins:60, happiness:10, diapers:2,
     ing:{}, meals:{}, drinks:{}, toys:[], clothes:[], wearing:null,
     soothe:false, resting:false, washed:false, health:true,
-    washing:false, checking:false, tts:true
+    washing:false, checking:false, tts:true, day:1, covered:null, spinning:false
   };
 }
 var S = fresh();
@@ -273,7 +280,9 @@ SCREENS.home = function(){
   }
   html += '<h3>الأقسام</h3>' +
     '<button class="primary" data-act="go" data-screen="girls" data-key="girls">تبني طفلة</button>' +
-    '<button class="primary" data-act="go" data-screen="boys" data-key="boys">تبني طفل</button>';
+    '<button class="primary" data-act="go" data-screen="boys" data-key="boys">تبني طفل</button>' +
+    '<button data-act="go" data-screen="wheel" data-key="wheel">عجلة الحظ</button>' +
+    (S.child ? '<button data-act="go" data-screen="newday" data-key="newday">بدء يوم جديد</button>' : '');
   if(S.child){
     html += '<button data-act="go" data-screen="childroom" data-key="childroom">غرفة الطفل</button>' +
       '<button data-act="go" data-screen="living" data-key="living">غرفة الجلوس</button>' +
@@ -281,6 +290,23 @@ SCREENS.home = function(){
       '<button data-act="go" data-screen="care" data-key="care">الرعاية</button>';
   }
   return html;
+};
+
+SCREENS.wheel = function(){
+  var h = title('عجلة الحظ');
+  h += '<div class="card"><p class="big">لفّي العجلة وخدي ' + fmt(WHEEL_PRIZE) + ' عملة.</p>' +
+    '<p class="muted">رصيدك دلوقتي ' + fmt(S.coins) + ' عملة.</p></div>';
+  h += '<button class="primary" data-act="spin" data-key="spin">' + (S.spinning ? 'العجلة بتلف…' : 'لفّي العجلة') + '</button>';
+  return h + backBtn('home');
+};
+
+SCREENS.newday = function(){
+  if(!S.child) return needChild();
+  var h = title('بدء يوم جديد');
+  h += '<div class="card"><p>اليوم رقم ' + S.day + '. لو بدأتي يوم جديد هتاخدي ' +
+    NEWDAY_COINS + ' عملة، وهقولك صحة ' + kidName() + ' وسعادتها، وهتسمعي صوت بكاءها.</p></div>';
+  h += '<button class="primary" data-act="newday" data-key="newday">ابدأي يوم جديد</button>';
+  return h + backBtn('home');
 };
 
 SCREENS.girls = function(){
@@ -352,10 +378,14 @@ SCREENS.cook = function(){
 SCREENS.bed = function(){
   if(!S.child) return needChild();
   var h = title('السرير');
-  h += '<div class="card"><p>' + (S.resting ? childWordName() + ' نايمة وبتاخد راحة.' : childWordName() + ' صاحية.') + '</p></div>';
-  h += S.resting
-    ? '<button class="primary" data-act="wake" data-key="wake">إيقاظ ' + kidName() + '</button>'
-    : '<button class="primary" data-act="sleep" data-key="sleep">خلي ' + kidName() + ' ترتاح</button>';
+  var isF = S.child.gender === 'f';
+  var who = (isF ? 'الطفلة ' : 'الطفل ') + kidName();
+  h += '<div class="card"><p>' + who + (S.covered
+      ? ' ' + (isF ? 'متغطية' : 'متغطي') + ' بـ' + (S.covered === 'blanket' ? 'البطانية' : 'الكوفرتة') + ' و' + (isF ? 'بتاخد' : 'بياخد') + ' راحة.'
+      : ' في السرير و' + (isF ? 'مستنية' : 'مستني') + ' التغطية.') + '</p></div>';
+  h += '<button class="primary" data-act="cover" data-with="blanket" data-key="blanket">تغطية ' + who + ' بالبطانية</button>' +
+    '<button class="primary" data-act="cover" data-with="quilt" data-key="quilt">تغطية ' + who + ' بالكوفرتة</button>';
+  if(S.resting) h += '<button data-act="wake" data-key="wake">إيقاظ ' + kidName() + '</button>';
   return h + backBtn('childroom');
 };
 SCREENS.swing = function(){
@@ -558,6 +588,46 @@ function act(name, el){
     case 'go': go(el.getAttribute('data-screen')); return;
     case 'adopt': adopt(el.getAttribute('data-name'), el.getAttribute('data-gender')); return;
 
+    case 'spin': {
+      if(S.spinning) return;
+      S.spinning = true;
+      sfx('wheel');
+      rerender('العجلة بتلف…');
+      setTimeout(function(){
+        S.spinning = false;
+        S.coins += WHEEL_PRIZE;
+        save();
+        rerender('مبروك! عجلة الحظ ادّتك خمسين مليون عملة. رصيدك بقى ' + fmt(S.coins) + ' عملة.', 'spin');
+        sfx('coin');
+      }, 2600);
+      return;
+    }
+    case 'newday': {
+      if(!S.child) return;
+      S.day++;
+      S.coins += NEWDAY_COINS;
+      S.washed = false;
+      S.resting = false;
+      S.covered = null;
+      save();
+      sfx('cry');
+      announce('بدأ يوم جديد، اليوم رقم ' + S.day + '. خدتي ' + NEWDAY_COINS + ' عملة. صحة ' +
+        kidName() + (S.health ? ' جيدة' : ' سيئة') + '، و' + (S.child.gender === 'f' ? 'سعادتها ' : 'سعادته ') +
+        S.happiness + ' في المئة.');
+      rerender(null, 'newday');
+      return;
+    }
+    case 'cover': {
+      var w = el.getAttribute('data-with');
+      S.covered = w;
+      S.resting = true;
+      addHappy(1);
+      announce('تم تغطية ' + kidName() + ' بـ' + (w === 'blanket' ? 'البطانية' : 'الكوفرتة') + '، وبدأت فترة الراحة.');
+      sfx('success');
+      rerender();
+      return;
+    }
+
     case 'toilet': {
       if(!S.child) return;
       save();
@@ -642,12 +712,15 @@ function act(name, el){
       var toy = el.getAttribute('data-toy');
       var before = S.happiness;
       addHappy(1);
+      earn(PLAY_COINS);
+      var msg = 'لعبتي بـ ' + TOYS[toy].n + '. خدتي ' + PLAY_COINS + ' عملة.';
       if(S.happiness === before && S.happiness >= HAPPY_CAP){
-        announce('السعادة وصلت ' + HAPPY_CAP + ' في المئة، أعلى حاجة في اللعبة.');
+        msg += ' السعادة وصلت ' + HAPPY_CAP + ' في المئة، أعلى حاجة في اللعبة.';
       } else {
-        announce('لعبتي بـ ' + TOYS[toy].n + '. سعادة ' + kidWord() + ' بقت ' + S.happiness + ' في المئة.');
+        msg += ' سعادة ' + kidWord() + ' بقت ' + S.happiness + ' في المئة.';
       }
-      sfx('click');
+      announce(msg);
+      sfx('coin');
       rerender();
       return;
     }
@@ -663,8 +736,9 @@ function act(name, el){
       var dish = el.getAttribute('data-dish');
       if(!S.meals[dish]) return;
       S.meals[dish]--;
-      addHappy(1); earn(2);
-      announce('تم أكل ' + DISHES[dish].n + '.');
+      addHappy(EAT_HAPPY); earn(EAT_COINS);
+      announce('تم أكل ' + DISHES[dish].n + '. سعادة ' + kidWord() + ' زادت ' + EAT_HAPPY +
+        ' في المئة وبقت ' + S.happiness + '، وخدتي ' + EAT_COINS + ' عملة.');
       sfx('feed');
       rerender();
       return;
