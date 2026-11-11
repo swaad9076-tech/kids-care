@@ -50,7 +50,6 @@ input[type=text],input[type=password]{width:100%;font-family:inherit;font-size:1
 <body>
 <header>
   <h1>تربية الأطفال</h1>
-  <button id="read-screen-btn" data-act="read-screen" style="width:auto;margin:0;padding:10px 14px">اقرأ الشاشة</button>
   <button data-act="go" data-screen="settings" style="width:auto;margin:0;padding:10px 14px">الإعدادات</button>
   <div id="hdr-line"></div>
 </header>
@@ -119,7 +118,7 @@ function screenSummary(){
   var hdr = bodyText(document.getElementById('hdr-line'));
   if(hdr) parts.push(hdr);
   var n = screenEl.querySelectorAll('button').length;
-  parts.push('في الشاشة ' + n + ' أزرار. اضغط زرار اقرأ الشاشة في الأعلى لسماع كل المكتوب.');
+  parts.push('في الشاشة ' + n + ' أزرار.');
   return parts.join('. ');
 }
 function screenFullText(){
@@ -148,9 +147,17 @@ function readScreen(){
 /* ================= البيانات ================= */
 var KEY = 'kidscare_v1';
 var GIRLS = ['لارين','لورين','تولين','توانا','جمانة','إيلا','إيلين','ليان','أسيل','تالا',
-  'تاليا','جودي','جويرية','جيلان','جنى','جنة','سجى','رقية','مايا','هنى','نور','حور','سيا','تالين'];
+  'تاليا','جودي','جويرية','جيلان','جنى','جنة','سجى','رقية','مايا','هنى','نور','حور','سيا','تالين',
+  'سيلة','سيليا','سيلين','ريناد','زينة','ديمة','تية','لية','حلى','لجين','جليا','ملك','سدين','سهير',
+  'أروى','أميرة','حياة','سدرة','ريتاج','روفان','روقة','ريتال','جوري','بسمة','بسملة','ماجدة','قمر',
+  'مي','لولي','إيوش','آية','وعد','دودي','وردة','مريم','مليكة','ملاك','منة','روان','ديالا','ديانا',
+  'رسيل','ليلى','آلاء','روضة','ناهد','تقى','تقوى','أسماء','روزان','رزان','كيان','كارما','كارمن',
+  'مكة','سمى','لارا','يارا','حورية','ميرال','ميرني','نرمين','نيفين','ياسمين','رنا','شروق','جايدة',
+  'مها','عشق','ليليان','ميرا','لمى','إشى','بسم'];
 var BOYS = ['فهد','آدم','عمر','رعد','صقر','أدهم','فارس','ياسين','زياد','علي','كريم','ريان',
-  'أيان','إياد','حمزة','تيم','سليم','مراد','كنان','راكان','أويس','تميم','تيام','آسر'];
+  'أيان','إياد','حمزة','تيم','سليم','مراد','كنان','راكان','أويس','تميم','تيام','آسر',
+  'محمد','محمود','أحمد','سيف','العصفوري','عصفورة','الشناوي','سعيد','وليد','طاهر','شادي',
+  'مروان','حاتم','حل','محفوظ','فتحي','عبد','نجيب','شعب'];
 
 var ING = {
   onion:{n:'بصل', p:3}, lentil:{n:'عدس', p:3}, pasta:{n:'معكرونة', p:4},
@@ -172,6 +179,10 @@ var TOYS = {cat:{n:'قطة', p:25}, blocks:{n:'مكعبات', p:20}, car:{n:'ع�
 var CLOTHES = {reddress:'فستان أحمر', pajama:'بيجامة صغيرة ذهبية', suit:'بدلة صغيرة زمردية',
   shirt:'قميص صغير أزرق', shortred:'فستان قصير أحمر', pearl:'فستان لؤلؤي',
   silver:'بيجامة فضية', royal:'فستان ملكي طويل'};
+var SUPPLIES = {
+  shampoo:{n:'شامبو', p:8}, soap:{n:'صابون', p:5}, balm:{n:'بلسم', p:8},
+  drytissue:{n:'مناديل مجففة', p:4}, cotton:{n:'قطن', p:4}
+};
 var WHEEL_PRIZE = 50000000;
 var NEWDAY_COINS = 55;
 var PLAY_COINS = 55;
@@ -184,7 +195,9 @@ function fresh(){
     child:null, coins:60, happiness:10, diapers:2,
     ing:{}, meals:{}, drinks:{}, toys:[], clothes:[], wearing:null,
     soothe:false, resting:false, washed:false, health:true,
-    washing:false, checking:false, tts:true, day:1, covered:null, spinning:false
+    washing:false, checking:false, tts:true, day:1, covered:null, spinning:false,
+    warmWater:false, showerOn:false, dried:false,
+    supplies:{shampoo:1, soap:1, balm:1, drytissue:2, cotton:1}
   };
 }
 var S = fresh();
@@ -200,6 +213,7 @@ function save(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} 
 function fmt(n){ return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
 function kidWord(){ return S.child ? (S.child.gender === 'f' ? 'الطفلة' : 'الطفل') : 'الطفل'; }
 function kidName(){ return S.child ? S.child.name : ''; }
+function happyWord(){ return S.child && S.child.gender === 'm' ? 'سعادته' : 'سعادتها'; }
 
 function addHappy(n){
   S.happiness = Math.min(HAPPY_CAP, S.happiness + n);
@@ -340,13 +354,44 @@ SCREENS.childroom = function(){
   return h + backBtn('home');
 };
 
+function sup(id){ return (S.supplies && S.supplies[id]) || 0; }
 SCREENS.bathroom = function(){
   if(!S.child) return needChild();
   var h = title('الحمام');
-  h += '<button data-act="toilet" data-key="toilet">المرحاض</button>' +
+  h += '<div class="card"><p>' + (S.warmWater ? 'الميه دافئة وجاهزة.' : 'الميه باردة. سخّنيها الأول.') + '</p>' +
+    '<p class="muted">' + SUPPLIES.shampoo.n + ' ' + sup('shampoo') + ' • ' + SUPPLIES.soap.n + ' ' + sup('soap') +
+    ' • ' + SUPPLIES.balm.n + ' ' + sup('balm') + ' • ' + SUPPLIES.drytissue.n + ' ' + sup('drytissue') +
+    ' • ' + SUPPLIES.cotton.n + ' ' + sup('cotton') + '</p></div>';
+  h += '<button data-act="warm" data-key="warm">' + (S.warmWater ? 'الميه دافئة — اضغطي تخليها باردة' : 'ميه دافئة') + '</button>' +
+    '<button data-act="toilet" data-key="toilet">المرحاض</button>' +
     '<button data-act="changeDiaper" data-key="diaper">تغيير الحفاضة (عندك ' + S.diapers + ')</button>' +
-    '<button data-act="go" data-screen="wipes" data-key="wipes">المناديل المبللة</button>';
+    '<button data-act="go" data-screen="wipes" data-key="wipes">المناديل المبللة</button>' +
+    '<button class="primary" data-act="go" data-screen="sink" data-key="sink">الحوض</button>' +
+    '<button class="primary" data-act="go" data-screen="tub" data-key="tub">البانيو</button>';
   return h + backBtn('childroom');
+};
+SCREENS.sink = function(){
+  if(!S.child) return needChild();
+  var h = title('الحوض');
+  h += '<div class="card"><p>الميه ' + (S.warmWater ? 'دافئة' : 'باردة') + '.</p></div>';
+  h += '<button data-act="washFace" data-key="face">غسيل الوش</button>' +
+    '<button data-act="washHands" data-key="hands">غسل اليد (صابون ' + sup('soap') + ')</button>' +
+    '<button data-act="brushTeeth" data-key="teeth">غسيل الأسنان</button>' +
+    '<button data-act="rinse" data-key="rinse">المضمضة</button>';
+  return h + backBtn('bathroom');
+};
+SCREENS.tub = function(){
+  if(!S.child) return needChild();
+  var h = title('البانيو');
+  h += '<div class="card"><p>' + (S.showerOn ? 'الدش شغال.' : 'الدش مقفول.') + ' • الميه ' +
+    (S.warmWater ? 'دافئة' : 'باردة') + '.</p></div>';
+  h += '<button data-act="shower" data-key="shower">' + (S.showerOn ? 'إطفاء الدش' : 'تشغيل الدش') + '</button>' +
+    '<button data-act="shampoo" data-key="shampoo">شامبو (' + sup('shampoo') + ')</button>' +
+    '<button data-act="soapTub" data-key="soap">صابون (' + sup('soap') + ')</button>' +
+    '<button data-act="balm" data-key="balm">بلسم (' + sup('balm') + ')</button>' +
+    '<button data-act="dry" data-key="dry">تنشيف بالمناديل المجففة (' + sup('drytissue') + ')</button>' +
+    '<button data-act="cleanEar" data-key="ear">تنظيف الأذن بالقطن (' + sup('cotton') + ')</button>';
+  return h + backBtn('bathroom');
 };
 SCREENS.wipes = function(){
   var h = title('المناديل المبللة');
@@ -480,6 +525,11 @@ SCREENS.shopneeds = function(){
   var h = title('مستلزمات ' + (S.child && S.child.gender === 'm' ? 'الطفل' : 'الطفلة'));
   h += '<button data-act="buyDiapers" data-key="a">شراء حفاضات — 5 حفاضات بـ 10 عملات (عندك ' + S.diapers + ')</button>' +
     '<button data-act="buySoothe" data-key="b">' + (S.soothe ? 'لعبة تسكيت الأطفال (اشتريتيها)' : 'شراء لعبة لتسكيت الأطفال عن البكاء — 15 عملة') + '</button>';
+  var i = 0;
+  for(var id in SUPPLIES){
+    h += '<button data-act="buySupply" data-sup="' + id + '" data-key="s' + (i++) + '">' +
+      SUPPLIES[id].n + ' — ' + SUPPLIES[id].p + ' عملات (عندك ' + sup(id) + ')</button>';
+  }
   return h + backBtn('shop');
 };
 SCREENS.shopclothes = function(){
@@ -545,8 +595,7 @@ SCREENS.clinic = function(){
 SCREENS.settings = function(){
   var h = title('الإعدادات');
   h += '<h3>الصوت</h3>' +
-    '<button data-act="toggleTts" data-key="tts">النطق: ' + (S.tts ? 'شغال' : 'مقفول') + '</button>' +
-    '<button data-act="read-screen" data-key="read">اقرأ الشاشة</button>';
+    '<button data-act="toggleTts" data-key="tts">النطق: ' + (S.tts ? 'شغال' : 'مقفول') + '</button>';
   var st = '';
   try{ st = (window.Native && Native.cloudStatus) ? Native.cloudStatus() : ''; }catch(e){}
   h += '<h3>الصوت السحابي</h3><div class="card"><p class="muted">' + (st || 'الصوت السحابي غير متاح في النسخة دي. الصوت بيشتغل بصوت الهاتف.') + '</p></div>';
@@ -609,6 +658,8 @@ function act(name, el){
       S.washed = false;
       S.resting = false;
       S.covered = null;
+      S.showerOn = false;
+      S.dried = false;
       save();
       sfx('cry');
       announce('بدأ يوم جديد، اليوم رقم ' + S.day + '. خدتي ' + NEWDAY_COINS + ' عملة. صحة ' +
@@ -656,6 +707,91 @@ function act(name, el){
       announce('تم استخدام ' + word + '.');
       sfx('click');
       save();
+      return;
+    }
+    case 'warm': {
+      S.warmWater = !S.warmWater;
+      announce(S.warmWater ? 'سخّنتي الميه. بقت دافئة.' : 'خليتي الميه باردة تاني.');
+      sfx(S.warmWater ? 'success' : 'click');
+      rerender();
+      return;
+    }
+    case 'washFace': {
+      addHappy(S.warmWater ? 2 : 1);
+      save();
+      announce('تم غسل وش ' + kidName() + ' بالميه ' + (S.warmWater ? 'الدافئة' : 'الباردة') + '. ' +
+        happyWord() + ' ' + S.happiness + ' في المئة.');
+      sfx('water');
+      rerender();
+      return;
+    }
+    case 'washHands': {
+      if(sup('soap') <= 0){ announce('مفيش صابون. اشتريه من المتجر.', true); sfx('error'); return; }
+      S.supplies.soap--;
+      addHappy(1);
+      save();
+      announce('تم غسل إيد ' + kidName() + ' بالصابون. ' + happyWord() + ' ' + S.happiness + ' في المئة.');
+      sfx('water');
+      rerender();
+      return;
+    }
+    case 'brushTeeth': {
+      addHappy(1);
+      save();
+      announce('تم غسل أسنان ' + kidName() + '. ' + happyWord() + ' ' + S.happiness + ' في المئة.');
+      sfx('click');
+      rerender();
+      return;
+    }
+    case 'rinse': {
+      addHappy(1);
+      save();
+      announce('تم المضمضة بالميه ' + (S.warmWater ? 'الدافئة' : 'الباردة') + '.');
+      sfx('water');
+      rerender();
+      return;
+    }
+    case 'shower': {
+      S.showerOn = !S.showerOn;
+      if(S.showerOn && !S.warmWater) announce('شغّلتي الدش، بس الميه باردة. الأحسن تسخّنيها.');
+      else announce(S.showerOn ? 'تم تشغيل الدش. الميه دافئة.' : 'تم إطفاء الدش.');
+      sfx(S.showerOn ? 'water' : 'click');
+      rerender();
+      return;
+    }
+    case 'shampoo':
+    case 'soapTub':
+    case 'balm': {
+      var sid = name === 'shampoo' ? 'shampoo' : name === 'balm' ? 'balm' : 'soap';
+      if(!S.showerOn){ announce('شغّلي الدش الأول.', true); sfx('error'); return; }
+      if(sup(sid) <= 0){ announce('مفيش ' + SUPPLIES[sid].n + '. اشتريه من المتجر.', true); sfx('error'); return; }
+      S.supplies[sid]--;
+      addHappy(1);
+      save();
+      announce('تم استخدام ' + SUPPLIES[sid].n + ' لـ' + kidName() + '. ' + happyWord() + ' ' + S.happiness + ' في المئة.');
+      sfx('water');
+      rerender();
+      return;
+    }
+    case 'dry': {
+      if(sup('drytissue') <= 0){ announce('مفيش مناديل مجففة. اشتريها من المتجر.', true); sfx('error'); return; }
+      S.supplies.drytissue--;
+      S.dried = true;
+      addHappy(1);
+      save();
+      announce('نشّفتي ' + kidName() + ' بالمناديل المجففة.');
+      sfx('click');
+      rerender();
+      return;
+    }
+    case 'cleanEar': {
+      if(sup('cotton') <= 0){ announce('مفيش قطن. اشتريه من المتجر.', true); sfx('error'); return; }
+      S.supplies.cotton--;
+      addHappy(1);
+      save();
+      announce('تم تنظيف أذن ' + kidName() + ' بالقطن.');
+      sfx('click');
+      rerender();
       return;
     }
     case 'wash': {
@@ -785,6 +921,15 @@ function act(name, el){
       if(!spend(ING[iid].p)) return;
       S.ing[iid] = (S.ing[iid] || 0) + 1;
       announce('اشتريتي ' + ING[iid].n + '. عندك ' + S.ing[iid] + '.');
+      sfx('buy');
+      rerender();
+      return;
+    }
+    case 'buySupply': {
+      var sid2 = el.getAttribute('data-sup');
+      if(!spend(SUPPLIES[sid2].p)) return;
+      S.supplies[sid2] = sup(sid2) + 1;
+      announce('اشتريتي ' + SUPPLIES[sid2].n + '. عندك ' + S.supplies[sid2] + '.');
       sfx('buy');
       rerender();
       return;
