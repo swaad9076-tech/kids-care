@@ -63,7 +63,8 @@ input[type=text],input[type=password]{width:100%;font-family:inherit;font-size:1
 var SFX_FILES = {click:'sfx/click.mp3', coin:'sfx/coin.mp3', buy:'sfx/buy.mp3',
   success:'sfx/success.mp3', error:'sfx/error.mp3', feed:'sfx/feed.mp3',
   morning:'sfx/morning.mp3', harvest:'sfx/harvest.mp3', water:'sfx/water.mp3',
-  wheel:'sfx/wheel.mp3', collect:'sfx/collect.mp3', cry:'sfx/cry.mp3'};
+  wheel:'sfx/wheel.mp3', collect:'sfx/collect.mp3', cry:'sfx/cry.mp3',
+  bell:'sfx/bell.mp3', laugh:'sfx/laugh.mp3'};
 var sfxCache = {};
 function sfx(name){
   try{
@@ -80,6 +81,51 @@ document.addEventListener('pointerdown', function unlockAudio(){
   document.removeEventListener('pointerdown', unlockAudio);
   sfx('click');
 }, { once:true });
+
+/* موسيقى خلفية — أداة واحدة، تتوقف أول ما نطلب */
+var bgMusic = null;
+function musicStart(file){
+  musicStop();
+  try{
+    bgMusic = new Audio(file);
+    bgMusic.loop = true;
+    bgMusic.volume = 0.55;
+    bgMusic.play();
+  }catch(e){ bgMusic = null; }
+}
+function musicStop(){
+  if(!bgMusic) return;
+  try{ bgMusic.pause(); bgMusic.currentTime = 0; }catch(e){}
+  bgMusic = null;
+}
+
+/* أصوات مخصصة: المعلمة نغمة عادية، الطفل نغمة أعلى وأسرع */
+var VOICE_TEACHER = { pitch:1.05, rate:0.92 };
+var VOICE_TEACHER2 = { pitch:1.14, rate:0.95 };
+var VOICE_MAN = { pitch:0.78, rate:0.92 };
+var VOICE_MAN2 = { pitch:0.72, rate:0.90 };
+var VOICE_KID = { pitch:1.55, rate:1.02 };
+var VOICE_KID2 = { pitch:1.42, rate:1.05 };
+
+/* ينطق قائمة جمل بأصوات مختلفة: [ [نص, صوت], ... ] — صوت ثابت طول الدرس */
+function speakLesson(lines){
+  if(!S.tts || !lines || !lines.length) return;
+  try{
+    if(window.Native && Native.speakNow){
+      try{ Native.stopSpeaking(); }catch(e){}
+      for(var i = 0; i < lines.length; i++){
+        var t = lines[i][0], v = lines[i][1] || VOICE_TEACHER;
+        if(i === 0) Native.speakNow(t, v.pitch, v.rate);
+        else Native.speakAdd(t, v.pitch, v.rate);
+      }
+      return;
+    }
+  }catch(e){}
+  // بديل بسيط لو مفيش جسر أصلي
+  var all = [];
+  for(var j = 0; j < lines.length; j++) all.push(lines[j][0]);
+  speakOut(all.join(' '));
+}
 
 function speakOut(text){
   if(!text || !S.tts) return;
@@ -105,6 +151,13 @@ function announce(text, assertive){
   box.textContent = '';
   setTimeout(function(){ box.textContent = text; }, 60);
   speakOut(text);
+  showToast(text);
+}
+/* تحديث الشاشة وقارئ الشاشة من غير ما يقطع الكلام الشغال */
+function announceQuiet(text, assertive){
+  var box = document.getElementById(assertive ? 'alert' : 'announcer');
+  box.textContent = '';
+  setTimeout(function(){ box.textContent = text; }, 60);
   showToast(text);
 }
 
@@ -178,11 +231,134 @@ var TOYS = {cat:{n:'قطة', p:25}, blocks:{n:'مكعبات', p:20}, car:{n:'ع�
   toktok:{n:'توك توك', p:40}, moto:{n:'موتوسيكل', p:35}, colorblocks:{n:'مكعبات ألوان', p:22}};
 var CLOTHES = {reddress:'فستان أحمر', pajama:'بيجامة صغيرة ذهبية', suit:'بدلة صغيرة زمردية',
   shirt:'قميص صغير أزرق', shortred:'فستان قصير أحمر', pearl:'فستان لؤلؤي',
-  silver:'بيجامة فضية', royal:'فستان ملكي طويل'};
+  silver:'بيجامة فضية', royal:'فستان ملكي طويل',
+  dressgreen:'فستان أخضر', dressblue:'فستان أزرق', dresspink:'فستان وردي',
+  dressmoon:'فستان القمر', dresskings:'فستان الملوك',
+  pjred:'بيجامة حمراء', pjgreen:'بيجامة خضراء', pjwhite:'بيجامة بيضاء',
+  pjblack:'بيجامة سوداء', pjblue:'بيجامة زرقاء', pjpurple:'بيجامة بنفسجية',
+  shirtred:'قميص أحمر', shirtblack:'قميص أسود',
+  suitred:'بدلة حمراء', suitblack:'بدلة سوداء', suitgreen:'بدلة خضراء',
+  suityellow:'بدلة صفراء', suitblue:'بدلة زرقاء'};
+var CLOTH_CAT = {
+  reddress:'dress', shortred:'dress', pearl:'dress', royal:'dress',
+  dressgreen:'dress', dressblue:'dress', dresspink:'dress', dressmoon:'dress', dresskings:'dress',
+  pajama:'pajama', silver:'pajama', pjred:'pajama', pjgreen:'pajama', pjwhite:'pajama',
+  pjblack:'pajama', pjblue:'pajama', pjpurple:'pajama',
+  shirt:'shirt', shirtred:'shirt', shirtblack:'shirt',
+  suit:'suit', suitred:'suit', suitblack:'suit', suitgreen:'suit', suityellow:'suit', suitblue:'suit'
+};
+var CLOTH_PRICE = 20;
 var SUPPLIES = {
   shampoo:{n:'شامبو', p:8}, soap:{n:'صابون', p:5}, balm:{n:'بلسم', p:8},
   drytissue:{n:'مناديل مجففة', p:4}, cotton:{n:'قطن', p:4}
 };
+
+/* ===== المدرسة: المراحل والمعلمين والمنهج ===== */
+var STAGES = [
+  {id:'kg',   day:6,  n:'الحضانة أو الروضة', short:'كي جي 1'},
+  {id:'prim', day:20, n:'الابتدائي',         short:'الابتدائي'},
+  {id:'prep', day:30, n:'الإعدادي',          short:'الإعدادي'},
+  {id:'sec',  day:40, n:'الثانوي',           short:'الثانوي'},
+  {id:'uni',  day:50, n:'الجامعة',           short:'الجامعة'}
+];
+function stageAt(day){
+  var st = null;
+  for(var i = 0; i < STAGES.length; i++){ if(day >= STAGES[i].day) st = STAGES[i]; }
+  return st;
+}
+function stageNow(){ return stageAt(S.day); }
+
+var TEACHERS = [
+  {n:'تاليا هاني',  role:'معلمة رياضيات', subj:'math',  voice:{pitch:1.06, rate:0.92}, female:true},
+  {n:'ياسمين علي',  role:'معلمة علوم',    subj:'sci',   voice:{pitch:1.14, rate:0.96}, female:true},
+  {n:'علي محمد',    role:'معلم عربي',     subj:'ar',    voice:{pitch:0.78, rate:0.92}, female:false},
+  {n:'أيمن إبراهيم', role:'معلم إنجليزي', subj:'en',    voice:{pitch:0.72, rate:0.90}, female:false}
+];
+function teacherToday(){
+  var idx = (S.day - 6) % 4;
+  if(idx < 0) idx = 0;
+  return TEACHERS[idx];
+}
+
+var LESSONS = {
+  math: {
+    base: [
+      'النهاردة هنحسب مع بعض.',
+      'واحد زائد واحد بيساوي اتنين.',
+      'لو معاك تفاحة، وجبت تفاحة تانية، يبقى في إيدك تفاحتين.',
+      'والشاطر اللي يقولي: اتنين زائد اتنين بيساوي كام؟ أربعة! برافو عليكم.'
+    ],
+    prim: ['تعالوا نحسب: ثلاثة في اثنين بيساوي ستة.', 'والطرح: خمسة ناقص اتنين بيساوي ثلاثة.'],
+    prep: ['النهاردة هنعرف الكسور. النص يعني حاجة واحدة من اتنين.', 'والربع يعني حاجة من أربعة.'],
+    sec: ['النهاردة هنحل معادلة: لو س زائد اثنين بيساوي خمسة، يبقى س بيساوي ثلاثة.', 'الجبر زي الألغاز، كل خطوة بتقربنا للحل.'],
+    uni: ['النهاردة هندرس الإحصاء. المتوسط هو مجموع الأرقام مقسوم على عددها.', 'ولو الأرقام متطابقة، المتوسط بيبان بسهولة.']
+  },
+  sci: {
+    base: [
+      'النهاردة هنعرف المية.',
+      'المية سايلة، وبتاخد شكل الكوباية اللي فيها.',
+      'والشمس بتطلع من الشرق كل صباح، وتنوّر الدنيا.',
+      'مين يعرف لون السما؟ أزرق! برافو عليكم.'
+    ],
+    prim: ['النبات بياخد مية وشمس عشان يكبر.', 'والإنسان بيتنفس هوا عشان يعيش.'],
+    prep: ['النهاردة هنعرف الخلية. جسمنا كله مبني من خلايا صغيرة.', 'وكل خلية ليها شغلتها.'],
+    sec: ['هنعرف الجاذبية. الأرض بتشد كل حاجة ليها.', 'علشان كده الحاجة بتقع على الأرض مش بتطير.'],
+    uni: ['النهاردة هندرس الطاقة. الطاقة ما بتفناش، بتتحول من شكل لشكل.', 'والكهربا شكل من أشكال الطاقة.']
+  },
+  ar: {
+    base: [
+      'النهاردة هنقرأ حرف الألف.',
+      'الألف زي العصاية الواقفة.',
+      'ألف أرنب، ألف أسد، ألف أمل. قولوا معايا.',
+      'والحرف اللي بعده الباء، زي البطة.'
+    ],
+    prim: ['هنكتب جملة كاملة: الطفلة بتحب المدرسة.', 'الجملة بتبدأ بحرف كبير في الإنجليزي، وفي العربي بتبدأ بالكلمة.'],
+    prep: ['النهاردة هنقرأ قطعة صغيرة، وهنسأل بعدها عن المعنى.', 'القراءة مش حفظ، القراءة فهم.'],
+    sec: ['هنعرف الفعل والفاعل والمفعول.', 'مثال: شرب الولد اللبن. الولد فاعل، واللبن مفعول.'],
+    uni: ['النهاردة هندرس النقد الأدبي.', 'النص بيتقرأ مرة للفهم، ومرة للجمال، ومرة للتحليل.']
+  },
+  en: {
+    base: [
+      'Good morning, boys and girls.',
+      'النهاردة هنقول كلمة واحدة: Cat. يعني قطة.',
+      'Repeat after me: Cat.',
+      'Very good! قولوا تاني: Cat.'
+    ],
+    prim: ['New word today: Book. يعني كتاب. This is my book.', 'وTry again: Book. Excellent!'],
+    prep: ['Today we learn the verb To Be: I am, you are, he is.', 'Repeat: I am a student.'],
+    sec: ['Today we practice the past tense: I played, I studied.', 'The lesson is easy when we repeat it.'],
+    uni: ['Today we read a short paragraph and answer three questions.', 'Read slowly, then answer. Take your time.']
+  }
+};
+function lessonLines(subj, stageId){
+  var L = LESSONS[subj];
+  var arr = L.base.slice();
+  if(stageId !== 'kg' && L[stageId]) arr = arr.concat(L[stageId]);
+  return arr;
+}
+
+/* ===== الجامعات ===== */
+var UNIS = {
+  econ:  {n:'جامعة الاقتصاد والعلوم السياسية', d:'هندرس فيها السياسة والاقتصاد وإدارة الدولة.'},
+  dar:   {n:'جامعة دار العلوم', d:'هندرس فيها اللغة العبرية والفارسية وعلوم القرآن.'},
+  media: {n:'جامعة الإعلام', d:'هندرس فيها الإعلام وصناعة الأخبار والإعلان.'},
+  quran: {n:'جامعة علوم القرآن', d:'هندرس فيها التفسير والقراءات وعلوم القرآن.'},
+  eng:   {n:'كلية الهندسة', d:'هندرس فيها البناء والآلات والكهربا.'},
+  med:   {n:'كلية الطب', d:'هندرس فيها جسم الإنسان والعلاج.'},
+  cs:    {n:'كلية الحاسبات', d:'هندرس فيها البرمجة والذكاء الاصطناعي.'}
+};
+var UNI_ORDER = ['econ','dar','quran','media','eng','med','cs'];
+
+/* ===== ركن التزيين ===== */
+var MAKEUP = {
+  rouge:{n:'روج أحمر'}, liner:{n:'إيلاينر أسود'}, hl:{n:'هايلايتر أبيض'}
+};
+var STORY_LINES = [
+  'كان يا ما كان، في بيت صغير، طفل بيحب يلعب بعد ما يخلص واجبه.',
+  'وفي يوم، لقى في حديقة البيت عصفورة صغيرة مكسورة الجناح.',
+  'خدها البيت، وحط لها مية وحبوب، وكل يوم يطمن عليها.',
+  'بعد أسبوع، العصفورة خفت، وطارت لفوق، ولفّت حوالين البيت شكرًا.',
+  'وقالت له: اللي بيساعد غيره، الخير بيرجع له.' ];
 var WHEEL_PRIZE = 50000000;
 var NEWDAY_COINS = 55;
 var PLAY_COINS = 55;
@@ -197,7 +373,9 @@ function fresh(){
     soothe:false, resting:false, washed:false, health:true,
     washing:false, checking:false, tts:true, day:1, covered:null, spinning:false,
     warmWater:false, showerOn:false, dried:false,
-    supplies:{shampoo:1, soap:1, balm:1, drytissue:2, cotton:1}
+    supplies:{shampoo:1, soap:1, balm:1, drytissue:2, cotton:1},
+    crying:false, laughed:false, lessons:0, uni:null, lastStage:null,
+    makeup:{rouge:false, liner:false, hl:false}
   };
 }
 var S = fresh();
@@ -297,6 +475,15 @@ SCREENS.home = function(){
     '<button class="primary" data-act="go" data-screen="boys" data-key="boys">تبني طفل</button>' +
     '<button data-act="go" data-screen="wheel" data-key="wheel">عجلة الحظ</button>' +
     (S.child ? '<button data-act="go" data-screen="newday" data-key="newday">بدء يوم جديد</button>' : '');
+  var st = stageNow();
+  if(S.child && st){
+    html += '<button class="primary" data-act="go" data-screen="school" data-key="school">' +
+      (st.id === 'kg' ? 'الحضانة أو الروضة' : st.id === 'uni' ? 'الجامعة' : 'المدرسة — ' + st.short) + '</button>';
+    if(st.id === 'uni'){
+      html += '<button data-act="go" data-screen="university" data-key="uni">اختيار الجامعة' +
+        (S.uni ? ' — ' + UNIS[S.uni].n : '') + '</button>';
+    }
+  }
   if(S.child){
     html += '<button data-act="go" data-screen="childroom" data-key="childroom">غرفة الطفل</button>' +
       '<button data-act="go" data-screen="living" data-key="living">غرفة الجلوس</button>' +
@@ -344,14 +531,45 @@ SCREENS.childroom = function(){
   if(!S.child) return needChild();
   var h = title('غرفة ' + kidName());
   h += '<div class="card"><p>' + childWordName() + ' في الغرفة. السعادة ' + S.happiness + ' من ' + HAPPY_CAP + '.</p>' +
-    (S.health ? '' : '<p class="warn-text">' + kidWord() + ' تعبانة. روحي قسم الرعاية.</p>') + '</div>';
+    (S.health ? '' : '<p class="warn-text">' + kidWord() + ' تعبانة. روحي قسم الرعاية.</p>') +
+    (S.crying ? '<p class="warn-text">' + kidName() + ' بتعيط من بعد الحمام. جربي لعبة تسكيت الأطفال.</p>' : '') + '</div>';
+  if(S.crying){
+    h += '<button class="primary" data-act="soothe" data-key="soothe">' +
+      (S.soothe ? 'اللعب بلعبة تسكيت الأطفال' : 'لعبة تسكيت الأطفال (مش عندك — من المتجر)') + '</button>';
+  }
   h += '<button data-act="go" data-screen="bathroom" data-key="bathroom">الحمام</button>' +
     '<button data-act="go" data-screen="kitchen" data-key="kitchen">المطبخ</button>' +
     '<button data-act="go" data-screen="bed" data-key="bed">السرير</button>' +
     '<button data-act="go" data-screen="swing" data-key="swing">الأرجوحة</button>' +
     '<button data-act="go" data-screen="wardrobe" data-key="wardrobe">الدولاب</button>' +
+    '<button data-act="go" data-screen="decor" data-key="decor">ركن التزيين</button>' +
     '<button data-act="go" data-screen="toyshelf" data-key="toyshelf">رف الألعاب</button>';
   return h + backBtn('home');
+};
+
+SCREENS.decor = function(){
+  if(!S.child) return needChild();
+  var girl = S.child.gender === 'f';
+  var h = title('ركن التزيين');
+  h += '<div class="card"><p>ركن التزيين جنب رف الألعاب. ' +
+    (girl ? 'الفساتين والبيجامات قدامك.' : 'القمصان والبدل والبيجامات قدامك.') + '</p></div>';
+  h += '<h3>مكياج</h3>';
+  for(var m in MAKEUP){
+    h += '<button data-act="makeup" data-make="' + m + '" data-key="m' + m + '">' +
+      MAKEUP[m].n + (S.makeup[m] ? ' — معمول' : ' — حطيه') + '</button>';
+  }
+  h += '<h3>هدوم</h3>';
+  var cats = girl ? ['dress','pajama'] : ['shirt','suit','pajama'];
+  var any = false;
+  for(var id in CLOTHES){
+    if(cats.indexOf(CLOTH_CAT[id]) < 0) continue;
+    var owned = S.clothes.indexOf(id) >= 0;
+    any = true;
+    h += '<button data-act="wear" data-cloth="' + id + '" data-key="d' + id + '">' +
+      CLOTHES[id] + (S.wearing === id ? ' — لابساها' : owned ? ' — البسيها' : ' — لازم تشتريها') + '</button>';
+  }
+  if(!any) h += '<div class="card"><p>مفيش هدوم مناسبة لسه.</p></div>';
+  return h + backBtn('childroom');
 };
 
 function sup(id){ return (S.supplies && S.supplies[id]) || 0; }
@@ -473,11 +691,52 @@ SCREENS.wardrobe = function(){
   return h + backBtn('childroom');
 };
 
+SCREENS.school = function(){
+  if(!S.child) return needChild();
+  var st = stageNow();
+  var h = title(st ? st.n : 'المدرسة');
+  if(!st){
+    h += '<div class="card"><p>المدرسة هتفتح لما تتم ٦ أيام. اليوم عندك ' + S.day + '.</p></div>';
+    return h + backBtn('home');
+  }
+  var t = teacherToday();
+  h += '<div class="card"><p>اليوم رقم ' + S.day + ' • ' + st.n + '.</p>' +
+    (st.id === 'uni' ? '<p>الجامعة: ' + (S.uni ? UNIS[S.uni].n : 'لسه ما اخترتيش جامعة.') + '</p>' : '') +
+    '<p>المعلم النهاردة: ' + t.role + '، ' + t.n + '.</p>' +
+    '<p class="muted">دروس اتاخدت: ' + S.lessons + '</p></div>';
+  h += '<button class="primary" data-act="lesson" data-key="lesson">دخول ' +
+    (t.female ? 'المعلمة ' : 'المعلم ') + t.n + ' وبدء الدرس</button>';
+  if(st.id === 'uni'){
+    h += '<button data-act="go" data-screen="university" data-key="uni">اختيار الجامعة</button>';
+  }
+  h += '<h3>منهج النهاردة</h3>';
+  var lines = lessonLines(t.subj, st.id);
+  for(var i = 0; i < lines.length; i++){
+    h += '<div class="card"><p>' + lines[i] + '</p></div>';
+  }
+  return h + backBtn('home');
+};
+
+SCREENS.university = function(){
+  if(!S.child) return needChild();
+  var h = title('اختيار الجامعة');
+  h += '<div class="card"><p>اختاري الجامعة اللي ' + kidName() + ' هيدخلها لما تتم ٥٠ يوم.</p></div>';
+  for(var i = 0; i < UNI_ORDER.length; i++){
+    var id = UNI_ORDER[i], u = UNIS[id];
+    h += '<button data-act="pickUni" data-uni="' + id + '" data-key="u' + i + '">' +
+      u.n + (S.uni === id ? ' — اختارتيها' : '') + '</button>';
+  }
+  var chosen = S.uni ? UNIS[S.uni] : null;
+  if(chosen) h += '<div class="card"><p>' + chosen.n + ': ' + chosen.d + '</p></div>';
+  return h + backBtn('home');
+};
+
 SCREENS.living = function(){
   if(!S.child) return needChild();
   var h = title('غرفة الجلوس');
   h += '<button data-act="go" data-screen="table" data-key="table">طاولة الطعام</button>' +
-    '<button data-act="go" data-screen="snacks" data-key="snacks">طاولة التسالي والمشروبات</button>';
+    '<button data-act="go" data-screen="snacks" data-key="snacks">طاولة التسالي والمشروبات</button>' +
+    '<button data-act="story" data-key="story">حكاية قبل النوم</button>';
   return h + backBtn('home');
 };
 SCREENS.table = function(){
@@ -533,12 +792,15 @@ SCREENS.shopneeds = function(){
   return h + backBtn('shop');
 };
 SCREENS.shopclothes = function(){
+  var girl = S.child && S.child.gender === 'f';
   var h = title('ملابس الأطفال');
+  var cats = girl ? ['dress','pajama'] : ['shirt','suit','pajama'];
   var i = 0;
   for(var id in CLOTHES){
+    if(cats.indexOf(CLOTH_CAT[id]) < 0) continue;
     var owned = S.clothes.indexOf(id) >= 0;
     h += '<button data-act="buyCloth" data-cloth="' + id + '" data-key="l' + (i++) + '">' +
-      CLOTHES[id] + (owned ? ' — عندك' : ' — 20 عملة') + '</button>';
+      CLOTHES[id] + (owned ? ' — عندك' : ' — ' + CLOTH_PRICE + ' عملة') + '</button>';
   }
   return h + backBtn('shop');
 };
@@ -634,7 +896,7 @@ function adopt(name, gender){
 function act(name, el){
   switch(name){
     case 'read-screen': readScreen(); return;
-    case 'go': go(el.getAttribute('data-screen')); return;
+    case 'go': musicStop(); go(el.getAttribute('data-screen')); return;
     case 'adopt': adopt(el.getAttribute('data-name'), el.getAttribute('data-gender')); return;
 
     case 'spin': {
@@ -653,18 +915,27 @@ function act(name, el){
     }
     case 'newday': {
       if(!S.child) return;
+      var prevStage = stageNow();
       S.day++;
+      var nowStage = stageAt(S.day);
       S.coins += NEWDAY_COINS;
       S.washed = false;
       S.resting = false;
       S.covered = null;
       S.showerOn = false;
       S.dried = false;
+      S.crying = false;
+      S.laughed = false;
       save();
       sfx('cry');
-      announce('بدأ يوم جديد، اليوم رقم ' + S.day + '. خدتي ' + NEWDAY_COINS + ' عملة. صحة ' +
+      var nd = 'بدأ يوم جديد، اليوم رقم ' + S.day + '. خدتي ' + NEWDAY_COINS + ' عملة. صحة ' +
         kidName() + (S.health ? ' جيدة' : ' سيئة') + '، و' + (S.child.gender === 'f' ? 'سعادتها ' : 'سعادته ') +
-        S.happiness + ' في المئة.');
+        S.happiness + ' في المئة.';
+      if(nowStage && (!prevStage || nowStage.id !== prevStage.id)){
+        nd += ' مبروك! ' + kidName() + (S.child.gender === 'f' ? ' دخلت ' : ' دخل ') + nowStage.n + '.';
+        if(nowStage.id === 'uni' && !S.uni) nd += ' اختاري الجامعة من قسم اختيار الجامعة.';
+      }
+      announce(nd);
       rerender(null, 'newday');
       return;
     }
@@ -777,10 +1048,16 @@ function act(name, el){
       if(sup('drytissue') <= 0){ announce('مفيش مناديل مجففة. اشتريها من المتجر.', true); sfx('error'); return; }
       S.supplies.drytissue--;
       S.dried = true;
+      S.crying = true;
+      S.laughed = false;
       addHappy(1);
       save();
-      announce('نشّفتي ' + kidName() + ' بالمناديل المجففة.');
-      sfx('click');
+      sfx('cry');
+      announceQuiet('نشّفتي ' + kidName() + ' بالمناديل المجففة.');
+      setTimeout(function(){
+        if(!S.tts) return;
+        speakOut(kidName() + ' بدأت تعيط بعد الحمام. جربي لعبة تسكيت الأطفال من غرفة الطفل.');
+      }, 2400);
       rerender();
       return;
     }
@@ -862,10 +1139,106 @@ function act(name, el){
     }
     case 'wear': {
       var cl = el.getAttribute('data-cloth');
+      if(S.clothes.indexOf(cl) < 0){
+        announce('الهدوم دي لسه مش عندك. اشتريها من المتجر بـ' + CLOTH_PRICE + ' عملة.', true);
+        sfx('error');
+        return;
+      }
       S.wearing = cl;
+      addHappy(1);
+      save();
       announce('تم إلباس ' + kidWord() + ' ' + CLOTHES[cl] + '.');
       sfx('success');
       rerender();
+      return;
+    }
+
+    case 'makeup': {
+      var mk = el.getAttribute('data-make');
+      S.makeup[mk] = !S.makeup[mk];
+      addHappy(1);
+      save();
+      announce(S.makeup[mk] ? 'حطيتي ' + MAKEUP[mk].n + ' لـ' + kidName() + '.' : 'شيلتي ' + MAKEUP[mk].n + '.');
+      sfx('click');
+      rerender();
+      return;
+    }
+
+    case 'lesson': {
+      if(!S.child) return;
+      var st = stageNow();
+      if(!st){ announce('المدرسة لسه مقفولة. هتفتح لما تتم ٦ أيام.', true); sfx('error'); return; }
+      var t = teacherToday();
+      var girl = S.child.gender === 'f';
+      var kidVoice = girl ? VOICE_KID : VOICE_KID2;
+      var addr = (t.female ? 'يا معلمة ' : 'يا معلم ') + t.n;
+      var lines = [];
+      lines.push(['تم دخول ' + (t.female ? 'المعلمة ' : 'المعلم ') + t.n + ' بنجاح.', VOICE_TEACHER]);
+      lines.push(['قوموا يلا يا ولاد!', t.voice]);
+      lines.push(['نورت الفصل ' + addr + '!', kidVoice]);
+      lines.push(['أنا ' + t.role + '، وهنبدأ الدرس.', t.voice]);
+      var body = lessonLines(t.subj, st.id);
+      for(var i = 0; i < body.length; i++) lines.push([body[i], t.voice]);
+      lines.push(['إلى اللقاء يا أطفالي.', t.voice]);
+      lines.push(['إلى اللقاء ' + addr + '!', kidVoice]);
+      S.lessons++;
+      addHappy(2);
+      earn(10);
+      save();
+      sfx('bell');
+      announceQuiet('دخلت ' + t.n + ' الفصل. الدرس بدأ، واستني لحد ما يخلص.');
+      rerender();
+      setTimeout(function(){ speakLesson(lines); }, 900);
+      return;
+    }
+
+    case 'pickUni': {
+      var uid = el.getAttribute('data-uni');
+      S.uni = uid;
+      addHappy(2);
+      save();
+      announce('اخترتي ' + UNIS[uid].n + '. ' + UNIS[uid].d);
+      sfx('success');
+      rerender();
+      return;
+    }
+
+    case 'soothe': {
+      if(!S.soothe){
+        announce('لعبة تسكيت الأطفال مش عندك. اشتريها من المتجر بـ١٥ عملة.', true);
+        sfx('error');
+        return;
+      }
+      if(!S.crying){
+        announce(kidName() + ' مش بتعيط دلوقتي. اللعبة مستنية لو احتجتها.');
+        return;
+      }
+      musicStart('sfx/playroom.mp3');
+      announceQuiet('بتحطي لعبة تسكيت الأطفال جنب ' + kidName() + '. الموسيقى شغالة، والبكاء بدأ يخف.');
+      sfx('laugh');
+      setTimeout(function(){
+        S.crying = false;
+        S.laughed = true;
+        addHappy(2);
+        save();
+        musicStop();
+        sfx('laugh');
+        announceQuiet('ضحكت ' + kidName() + '! البكاء وقف و' + happyWord() + ' بقت ' + S.happiness + ' في المئة.');
+        rerender();
+      }, 6000);
+      return;
+    }
+
+    case 'story': {
+      if(!S.child) return;
+      var sl = [];
+      sl.push(['حكاية قبل النوم. ' + STORY_LINES[0], VOICE_TEACHER2]);
+      for(var si = 1; si < STORY_LINES.length; si++) sl.push([STORY_LINES[si], VOICE_TEACHER2]);
+      addHappy(2);
+      save();
+      sfx('morning');
+      announceQuiet('حكاية قبل النوم بدأت. اقعدي جنب ' + kidName() + ' واسمعي.');
+      setTimeout(function(){ speakLesson(sl); }, 700);
       return;
     }
     case 'eat': {
@@ -909,7 +1282,7 @@ function act(name, el){
     case 'buyCloth': {
       var cid = el.getAttribute('data-cloth');
       if(S.clothes.indexOf(cid) >= 0){ announce('الهدوم دي عندك.'); return; }
-      if(!spend(20)) return;
+      if(!spend(CLOTH_PRICE)) return;
       S.clothes.push(cid);
       announce('اشتريتي ' + CLOTHES[cid] + '.');
       sfx('buy');

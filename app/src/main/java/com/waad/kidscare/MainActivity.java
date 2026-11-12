@@ -147,10 +147,13 @@ public class MainActivity extends Activity {
             tts.setLanguage(new Locale("ar", "EG"));
             tts.setLanguage(Locale.getDefault());
         }
-        tts.setSpeechRate(0.95f);
-        tts.setPitch(1.0f);
+        tts.setSpeechRate(DEF_RATE);
+        tts.setPitch(DEF_PITCH);
         chooseBestVoice();
     }
+
+    private static final float DEF_RATE = 0.95f;
+    private static final float DEF_PITCH = 1.0f;
 
     /** يختار الصوت العربي المحفوظ، أو أفضل صوت عربي محلي على الجهاز. */
     private void chooseBestVoice() {
@@ -217,6 +220,8 @@ public class MainActivity extends Activity {
         // Android يرفض النص الطويل في صمت (حد أقصى ~4000 حرف)؛ نقسمه على الجمل.
         final int MAX = 700;
         try {
+            tts.setSpeechRate(DEF_RATE);
+            tts.setPitch(DEF_PITCH);
             tts.stop();
             int start = 0;
             boolean first = true;
@@ -240,6 +245,28 @@ public class MainActivity extends Activity {
                 first = false;
                 start = end;
             }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * ينطق نصًا بنغمة وسرعة مختلفتين عبر المحرك المحلي فقط.
+     * flush=true يقطع الكلام الشغال، وflush=false يضيف آخر الطابور —
+     * بكده يتبني الدرس: كلام المعلمة، ثم صوت الولاد، ثم المعلمة تاني.
+     * المحرك بيحفظ النغمة لكل جملة وقت إضافتها، فالأصوات بتفضل متمايزة.
+     */
+    private void localSpeakStyled(String text, double pitch, double rate, boolean flush) {
+        if (!ttsReady || text == null) return;
+        String t = text.trim();
+        if (t.isEmpty()) return;
+        float p = (float) Math.max(0.5, Math.min(2.0, pitch));
+        float r = (float) Math.max(0.5, Math.min(2.0, rate));
+        try {
+            if (flush) tts.stop();
+            tts.setSpeechRate(r);
+            tts.setPitch(p);
+            tts.speak(t, flush ? TextToSpeech.QUEUE_FLUSH : TextToSpeech.QUEUE_ADD,
+                    null, "lesson" + System.nanoTime());
         } catch (Exception ignored) {
         }
     }
@@ -567,6 +594,18 @@ public class MainActivity extends Activity {
                 return;
             }
             localSpeak(text);
+        }
+
+        /** جملة بصوت مخصص — تقطع الكلام الشغال وتبدأ فورًا. للمعلمين والأطفال. */
+        @JavascriptInterface
+        public void speakNow(String text, double pitch, double rate) {
+            localSpeakStyled(text, pitch, rate, true);
+        }
+
+        /** جملة بصوت مخصص تُضاف آخر الطابور بدون قطع اللي قبله. */
+        @JavascriptInterface
+        public void speakAdd(String text, double pitch, double rate) {
+            localSpeakStyled(text, pitch, rate, false);
         }
 
         @JavascriptInterface
